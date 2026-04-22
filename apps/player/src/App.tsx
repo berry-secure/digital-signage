@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.2";
+const appVersion = "0.3.3";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -122,7 +122,12 @@ function App() {
 
     const reconnect = async () => {
       try {
-        await client.collection("screen_users").authWithPassword(settings.email, settings.password);
+        await signInScreenUser(
+          client,
+          settings.pocketbaseUrl || defaultPocketBaseUrl,
+          settings.email,
+          settings.password
+        );
         if (!cancelled) {
           setIsConnected(true);
           setShowConfig(false);
@@ -526,7 +531,9 @@ function App() {
 
     if (draftSettings.email.trim() && draftSettings.password) {
       try {
-        await nextClient.collection("screen_users").authWithPassword(
+        await signInScreenUser(
+          nextClient,
+          draftSettings.pocketbaseUrl.trim() || defaultPocketBaseUrl,
           draftSettings.email.trim(),
           draftSettings.password
         );
@@ -1109,17 +1116,21 @@ async function completePairingLogin(params: {
   let authRecordId = "";
 
   try {
-    const authResponse = await params.client
-      .collection("screen_users")
-      .authWithPassword(params.record.assignedEmail, params.session.installerId);
-    params.client.authStore.save(authResponse.token, authResponse.record);
+    const authResponse = await signInScreenUser(
+      params.client,
+      params.settings.pocketbaseUrl || defaultPocketBaseUrl,
+      params.record.assignedEmail,
+      params.session.installerId
+    );
     authRecordId = authResponse.record.id;
   } catch (primaryError) {
     try {
-      const fallbackResponse = await params.client
-        .collection("screen_users")
-        .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
-      params.client.authStore.save(fallbackResponse.token, fallbackResponse.record);
+      const fallbackResponse = await signInScreenUser(
+        params.client,
+        params.settings.pocketbaseUrl || defaultPocketBaseUrl,
+        params.record.assignedEmail,
+        params.session.pairingCode
+      );
       resolvedPassword = params.session.pairingCode;
       authRecordId = fallbackResponse.record.id;
     } catch {
@@ -1405,6 +1416,40 @@ function loadPairingSession() {
 
 function savePairingSession(session: PairingSession) {
   window.localStorage.setItem(pairingStorageKey, JSON.stringify(session));
+}
+
+async function signInScreenUser(
+  client: ReturnType<typeof createPocketBaseClient>,
+  baseUrl: string,
+  identity: string,
+  password: string
+): Promise<{ token: string; record: ScreenUserRecord }> {
+  const response = await fetch(
+    `${baseUrl.replace(/\/$/, "")}/api/collections/screen_users/auth-with-password`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ identity, password })
+    }
+  );
+
+  const payload = (await response.json()) as {
+    token?: string;
+    record?: ScreenUserRecord;
+    message?: string;
+  };
+
+  if (!response.ok || !payload.token || !payload.record) {
+    throw new Error(payload.message || "Nie udało się zalogować urządzenia.");
+  }
+
+  client.authStore.save(payload.token, payload.record);
+  return {
+    token: payload.token,
+    record: payload.record
+  };
 }
 
 function showFlash(
