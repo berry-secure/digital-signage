@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.3";
+const appVersion = "0.3.4";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -740,7 +740,7 @@ function App() {
         </div>
       </div>
 
-      {!isAuthenticated ? (
+      {!isAuthenticated && !settings.email.trim() ? (
         <div className="pairing-overlay">
           <div className="pairing-card">
             <span className="eyebrow">android tv waiting room</span>
@@ -767,6 +767,30 @@ function App() {
               <button className="ghost-button" onClick={() => setShowConfig(true)} type="button">
                 PocketBase URL
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {!isAuthenticated && settings.email.trim() ? (
+        <div className="pairing-overlay">
+          <div className="pairing-card">
+            <span className="eyebrow">device bootstrap</span>
+            <h2>Łączenie z CMS…</h2>
+            <p>
+              Urządzenie ma już zapisane konto ekranowe i próbuje zalogować się do PocketBase.
+              Jeśli ten ekran nie zniknie po kilku sekundach, użyj przycisku
+              <strong> Reset / rozłącz</strong> i zatwierdź urządzenie ponownie w CMS.
+            </p>
+            <div className="pairing-meta">
+              <span>Konto ekranowe</span>
+              <strong>{settings.email}</strong>
+              <small>{settings.pocketbaseUrl || defaultPocketBaseUrl}</small>
+            </div>
+            <div className="pairing-meta">
+              <span>APK</span>
+              <strong>{appVersion}</strong>
+              <small>{Capacitor.getPlatform()}</small>
             </div>
           </div>
         </div>
@@ -1138,50 +1162,53 @@ async function completePairingLogin(params: {
     }
   }
 
-  if (authRecordId) {
-    await params.client.collection("screen_users").update(authRecordId, {
-      status: "online",
-      lastSeenAt: new Date().toISOString(),
-      deviceModel: getDeviceDescriptor(),
-      appVersion
-    });
-  }
-
   const nextSettings = {
-    pocketbaseUrl: params.settings.pocketbaseUrl,
+    pocketbaseUrl: params.settings.pocketbaseUrl || defaultPocketBaseUrl,
     email: params.record.assignedEmail,
     password: resolvedPassword
   };
 
-  await params.client.collection("device_pairings").update(params.record.id, {
-    status: "claimed",
-    claimedAt: new Date().toISOString(),
-    lastSeenAt: new Date().toISOString()
-  });
-
   saveSettings(nextSettings);
-  savePairingSession({
+  const nextSession = {
     ...params.session,
     recordId: params.record.id,
     pairingCode: params.record.pairingCode || params.session.pairingCode
-  });
+  };
+  savePairingSession(nextSession);
   params.setSettings(nextSettings);
   params.setDraftSettings(nextSettings);
   params.setIsAuthenticated(true);
   params.setIsConnected(true);
   params.setPairingRecord(null);
-  params.setPairingSession({
-    ...params.session,
-    recordId: params.record.id,
-    pairingCode: params.record.pairingCode || params.session.pairingCode
-  });
+  params.setPairingSession(nextSession);
   params.setShowConfig(false);
   params.setPlaybackUnlocked(false);
   params.setCurrentIndex(0);
+
+  void Promise.allSettled([
+    authRecordId
+      ? params.client.collection("screen_users").update(authRecordId, {
+          status: "online",
+          lastSeenAt: new Date().toISOString(),
+          deviceModel: getDeviceDescriptor(),
+          appVersion
+        })
+      : Promise.resolve(),
+    params.client.collection("device_pairings").update(params.record.id, {
+      status: "claimed",
+      claimedAt: new Date().toISOString(),
+      lastSeenAt: new Date().toISOString()
+    })
+  ]);
+
   showFlash(params.setFlash, {
     kind: "success",
-    text: "Urządzenie zostało sparowane i zalogowane do playera."
+    text: "Urządzenie zostało sparowane i loguje się do playera."
   });
+
+  window.setTimeout(() => {
+    window.location.reload();
+  }, 180);
 }
 
 async function captureSnapshot(
