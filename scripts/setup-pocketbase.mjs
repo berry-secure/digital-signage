@@ -207,7 +207,7 @@ async function main() {
         maxSelect: 1,
         maxSize: 10485760,
         protected: true,
-        mimeTypes: ["image/*"]
+        mimeTypes: []
       },
       { name: "lastScreenshotAt", type: "date" },
       { name: "lastIpAddress", type: "text", max: 80 },
@@ -316,7 +316,7 @@ async function main() {
         maxSelect: 1,
         maxSize: 524288000,
         protected: true,
-        mimeTypes: ["video/*", "image/*"]
+        mimeTypes: []
       },
       { name: "durationSeconds", type: "number", required: true, min: 0, max: 86400 },
       { name: "hasAudio", type: "bool", required: true },

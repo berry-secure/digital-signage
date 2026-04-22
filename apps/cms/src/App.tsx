@@ -17,20 +17,6 @@ import type {
 
 const pb = createPocketBaseClient();
 
-const collectionNames = [
-  "clients",
-  "channels",
-  "cms_users",
-  "screen_users",
-  "device_pairings",
-  "device_commands",
-  "media_assets",
-  "playlists",
-  "playlist_items",
-  "schedule_rules",
-  "events"
-] as const;
-
 type SectionKey =
   | "overview"
   | "clients"
@@ -196,6 +182,8 @@ function App() {
   const [playlistItemForm, setPlaylistItemForm] = useState(defaultPlaylistItemForm);
   const [scheduleForm, setScheduleForm] = useState(defaultScheduleForm);
   const [eventForm, setEventForm] = useState(defaultEventForm);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(pb.authStore.isValid);
 
   useEffect(() => {
     return pb.authStore.onChange(() => {
@@ -207,16 +195,18 @@ function App() {
     if (!pb.authStore.isValid) {
       setDashboard(emptyDashboard);
       setFileToken("");
+      setHasLoadedOnce(false);
       setIsLoading(false);
       return;
     }
 
     let cancelled = false;
-    let timer = 0;
     let poller = 0;
 
-    const load = async () => {
-      setIsLoading(true);
+    const load = async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent && !hasLoadedOnce) {
+        setIsLoading(true);
+      }
 
       try {
         const [
@@ -241,18 +231,10 @@ function App() {
           safeGetFullList<CmsUserRecord>("cms_users", {
             sort: "name"
           }),
-          safeGetFullList<ScreenUserRecord>("screen_users", {
-            sort: "-lastSeenAt,locationLabel"
-          }),
-          safeGetFullList<DevicePairingRecord>("device_pairings", {
-            sort: "-created"
-          }),
-          safeGetFullList<DeviceCommandRecord>("device_commands", {
-            sort: "-created"
-          }),
-          safeGetFullList<MediaAssetRecord>("media_assets", {
-            sort: "-created"
-          }),
+          safeGetFullList<ScreenUserRecord>("screen_users"),
+          safeGetFullList<DevicePairingRecord>("device_pairings"),
+          safeGetFullList<DeviceCommandRecord>("device_commands"),
+          safeGetFullList<MediaAssetRecord>("media_assets"),
           safeGetFullList<PlaylistRecord>("playlists", {
             sort: "name"
           }),
@@ -299,6 +281,7 @@ function App() {
         });
       } finally {
         if (!cancelled) {
+          setHasLoadedOnce(true);
           setIsLoading(false);
         }
       }
@@ -306,39 +289,14 @@ function App() {
 
     void load();
     poller = window.setInterval(() => {
-      void load();
+      void load({ silent: true });
     }, 15000);
-
-    const subscribe = async () => {
-      const results = await Promise.allSettled(
-        collectionNames.map((name) =>
-          pb.collection(name).subscribe("*", () => {
-            window.clearTimeout(timer);
-            timer = window.setTimeout(() => {
-              void load();
-            }, 180);
-          })
-        )
-      );
-
-      results.forEach((result, index) => {
-        if (result.status === "rejected") {
-          logCmsError(`subscribe:${collectionNames[index]}`, result.reason);
-        }
-      });
-    };
-
-    void subscribe();
 
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
       window.clearInterval(poller);
-      collectionNames.forEach((name) => {
-        pb.collection(name).unsubscribe("*");
-      });
     };
-  }, [authRecord?.id, authRecord?.client, authRecord?.role]);
+  }, [authRecord?.id, authRecord?.client, authRecord?.role, hasLoadedOnce, refreshNonce]);
 
   useEffect(() => {
     if (!dashboard.screens.length) {
@@ -411,6 +369,10 @@ function App() {
       ? "https://cms.berry-secure.pl/app/maasck.apk"
       : new URL("/app/maasck.apk", window.location.origin).toString();
 
+  function triggerRefresh() {
+    setRefreshNonce((current) => current + 1);
+  }
+
   useEffect(() => {
     if (!pb.authStore.isValid || typeof window === "undefined") {
       return;
@@ -480,6 +442,7 @@ function App() {
         brandColor: clientForm.brandColor
       });
       setClientForm(defaultClientForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Dodano nowego klienta."
@@ -504,6 +467,7 @@ function App() {
         orientation: channelForm.orientation
       });
       setChannelForm(defaultChannelForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Kanał został zapisany."
@@ -557,6 +521,7 @@ function App() {
       );
 
       setCmsUserForm(defaultCmsUserForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Nowe konto CMS zostało utworzone."
@@ -639,6 +604,7 @@ function App() {
 
       setPairingForm(defaultPairingForm);
       setSelectedScreenId(createdScreen.id);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: `Urządzenie sparowane. Player zaloguje się jako ${email}.`
@@ -685,6 +651,7 @@ function App() {
         );
       }
 
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Profil urządzenia został zaktualizowany."
@@ -721,6 +688,7 @@ function App() {
       await pb.collection("media_assets").create(formData);
       setMediaFile(null);
       setMediaForm(defaultMediaForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Media zostały dodane do biblioteki."
@@ -747,6 +715,7 @@ function App() {
         })
       );
       setPlaylistForm(defaultPlaylistForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Playlista została utworzona."
@@ -778,6 +747,7 @@ function App() {
       });
 
       setPlaylistItemForm(defaultPlaylistItemForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Element playlisty został dodany."
@@ -810,6 +780,7 @@ function App() {
         })
       );
       setScheduleForm(defaultScheduleForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Reguła harmonogramu została zapisana."
@@ -841,6 +812,7 @@ function App() {
         })
       );
       setEventForm(defaultEventForm);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: "Event override został dodany."
@@ -894,6 +866,7 @@ function App() {
   async function handleQueueCommand(screen: ScreenUserRecord, commandType: DeviceCommandRecord["commandType"]) {
     try {
       await queueDeviceCommand(screen.id, commandType);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: `Komenda ${commandType} została zakolejkowana dla ${screen.locationLabel || screen.name}.`
@@ -922,6 +895,7 @@ function App() {
 
     try {
       await pb.collection(collection).delete(id);
+      triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
         text: `${label} zostało usunięte.`
@@ -2445,17 +2419,34 @@ function hydrateDashboardRelations(data: DashboardData): DashboardData {
   }));
 
   return {
-    clients,
-    channels,
-    cmsUsers,
-    screens,
-    devicePairings,
-    deviceCommands,
-    mediaAssets,
-    playlists,
-    playlistItems,
-    schedules,
-    events
+    clients: [...clients].sort((left, right) => compareText(left.name, right.name)),
+    channels: [...channels].sort((left, right) => compareText(left.name, right.name)),
+    cmsUsers: [...cmsUsers].sort((left, right) =>
+      compareText(left.name || left.email, right.name || right.email)
+    ),
+    screens: [...screens].sort(
+      (left, right) =>
+        compareDateDesc(left.lastSeenAt, right.lastSeenAt) ||
+        compareText(left.locationLabel || left.name, right.locationLabel || right.name)
+    ),
+    devicePairings: [...devicePairings].sort(
+      (left, right) =>
+        compareDateDesc(left.lastSeenAt, right.lastSeenAt) ||
+        compareText(left.pairingCode, right.pairingCode)
+    ),
+    deviceCommands: [...deviceCommands].sort(
+      (left, right) =>
+        compareDateDesc(left.processedAt || left.expiresAt, right.processedAt || right.expiresAt) ||
+        compareText(left.commandType, right.commandType)
+    ),
+    mediaAssets: [...mediaAssets].sort((left, right) => compareText(left.title, right.title)),
+    playlists: [...playlists].sort((left, right) => compareText(left.name, right.name)),
+    playlistItems: [...playlistItems].sort((left, right) => left.sortOrder - right.sortOrder),
+    schedules: [...schedules].sort((left, right) => right.priority - left.priority),
+    events: [...events].sort(
+      (left, right) =>
+        right.priority - left.priority || compareDateDesc(left.startsAt, right.startsAt)
+    )
   };
 }
 
@@ -2744,6 +2735,19 @@ function translateCommand(commandType: DeviceCommandRecord["commandType"]) {
     default:
       return commandType;
   }
+}
+
+function compareText(left: string, right: string) {
+  return String(left || "").localeCompare(String(right || ""), "pl", {
+    sensitivity: "base",
+    numeric: true
+  });
+}
+
+function compareDateDesc(left: string, right: string) {
+  const leftValue = left ? new Date(left).getTime() : 0;
+  const rightValue = right ? new Date(right).getTime() : 0;
+  return rightValue - leftValue;
 }
 
 function slugify(value: string) {
