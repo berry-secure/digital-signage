@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.0";
+const appVersion = "0.3.1";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -64,7 +64,7 @@ function App() {
   const [client, setClient] = useState(() =>
     createPocketBaseClient(initialSettings.pocketbaseUrl || defaultPocketBaseUrl)
   );
-  const [showConfig, setShowConfig] = useState<boolean>(!initialSettings.email);
+  const [showConfig, setShowConfig] = useState<boolean>(false);
   const [pairingSession, setPairingSession] = useState<PairingSession | null>(loadPairingSession());
   const [pairingRecord, setPairingRecord] = useState<DevicePairingRecord | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(emptySyncState);
@@ -73,6 +73,7 @@ function App() {
   const [syncing, setSyncing] = useState(client.authStore.isValid);
   const [flash, setFlash] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [isConnected, setIsConnected] = useState(client.authStore.isValid);
+  const [isAuthenticated, setIsAuthenticated] = useState(client.authStore.isValid);
   const [displayMode, setDisplayMode] = useState<"active" | "blackout">("active");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -94,6 +95,16 @@ function App() {
   const nowLabel = useNowLabel();
 
   useEffect(() => {
+    setIsAuthenticated(client.authStore.isValid);
+    setIsConnected(client.authStore.isValid);
+
+    return client.authStore.onChange(() => {
+      setIsAuthenticated(client.authStore.isValid);
+      setIsConnected(client.authStore.isValid);
+    });
+  }, [client]);
+
+  useEffect(() => {
     if (!queueSignature) {
       setCurrentIndex(0);
       return;
@@ -103,7 +114,7 @@ function App() {
   }, [queueSignature, syncState.queue.length]);
 
   useEffect(() => {
-    if (!settings.email || !settings.password || client.authStore.isValid) {
+    if (!settings.email || !settings.password || isAuthenticated) {
       return;
     }
 
@@ -157,7 +168,6 @@ function App() {
         }
 
         if (!cancelled) {
-          setShowConfig(true);
           setIsConnected(false);
         }
       }
@@ -168,10 +178,10 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [client, pairingSession, settings, settings.email, settings.password]);
+  }, [client, isAuthenticated, pairingSession, settings, settings.email, settings.password]);
 
   useEffect(() => {
-    if (client.authStore.isValid || settings.email.trim()) {
+    if (isAuthenticated || settings.email.trim()) {
       setPairingRecord(null);
       return;
     }
@@ -251,10 +261,10 @@ function App() {
       cancelled = true;
       window.clearInterval(poller);
     };
-  }, [client, pairingSession, settings]);
+  }, [client, isAuthenticated, pairingSession, settings]);
 
   useEffect(() => {
-    if (!client.authStore.isValid) {
+    if (!isAuthenticated) {
       setSyncState(emptySyncState);
       setSyncing(false);
       return;
@@ -304,10 +314,10 @@ function App() {
       cancelled = true;
       window.clearInterval(poller);
     };
-  }, [client]);
+  }, [client, isAuthenticated]);
 
   useEffect(() => {
-    if (!syncState.screen || !client.authStore.isValid) {
+    if (!syncState.screen || !isAuthenticated) {
       return;
     }
 
@@ -335,7 +345,7 @@ function App() {
     return () => {
       window.clearInterval(heartbeat);
     };
-  }, [client, currentItem, displayMode, syncState.screen]);
+  }, [client, currentItem, displayMode, isAuthenticated, syncState.screen]);
 
   useEffect(() => {
     if (!currentItem || !playbackUnlocked || displayMode === "blackout") {
@@ -454,7 +464,7 @@ function App() {
   }, [client, commandSignature, currentItem, displayMode, nowLabel, playbackUnlocked, syncState.pendingCommands, syncState.screen]);
 
   useEffect(() => {
-    if (!syncState.screen || !client.authStore.isValid) {
+    if (!syncState.screen || !isAuthenticated) {
       return;
     }
 
@@ -493,7 +503,7 @@ function App() {
       window.clearTimeout(timeout);
       window.clearInterval(interval);
     };
-  }, [client, currentItem, displayMode, nowLabel, playbackUnlocked, syncState.screen]);
+  }, [client, currentItem, displayMode, isAuthenticated, nowLabel, playbackUnlocked, syncState.screen]);
 
   useEffect(() => {
     return () => {
@@ -655,7 +665,7 @@ function App() {
         />
       ) : null}
 
-      {!currentItem && client.authStore.isValid ? (
+      {!currentItem && isAuthenticated ? (
         <div className="standby-overlay">
           <span className="eyebrow">Signal Deck Player</span>
           <h1>Brak aktywnej playlisty na ten moment.</h1>
@@ -719,7 +729,7 @@ function App() {
         </div>
       </div>
 
-      {!client.authStore.isValid ? (
+      {!isAuthenticated ? (
         <div className="pairing-overlay">
           <div className="pairing-card">
             <span className="eyebrow">android tv waiting room</span>
@@ -1090,20 +1100,32 @@ async function completePairingLogin(params: {
   setCurrentIndex: (value: number) => void;
 }) {
   let resolvedPassword = params.session.installerId;
+  let authRecordId = "";
 
   try {
-    await params.client
+    const authResponse = await params.client
       .collection("screen_users")
       .authWithPassword(params.record.assignedEmail, params.session.installerId);
+    authRecordId = authResponse.record.id;
   } catch (primaryError) {
     try {
-      await params.client
+      const fallbackResponse = await params.client
         .collection("screen_users")
         .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
       resolvedPassword = params.session.pairingCode;
+      authRecordId = fallbackResponse.record.id;
     } catch {
       throw primaryError;
     }
+  }
+
+  if (authRecordId) {
+    await params.client.collection("screen_users").update(authRecordId, {
+      status: "online",
+      lastSeenAt: new Date().toISOString(),
+      deviceModel: getDeviceDescriptor(),
+      appVersion
+    });
   }
 
   const nextSettings = {

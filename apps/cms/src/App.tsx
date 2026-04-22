@@ -632,7 +632,7 @@ function App() {
         channel: approvalForm.channel,
         locationLabel,
         volumePercent: Number(approvalForm.volumePercent) || 80,
-        status: "offline",
+        status: "pairing",
         notes: approvalForm.notes,
         desiredDisplayState: "active",
         deviceModel: pairing.deviceName,
@@ -654,6 +654,7 @@ function App() {
 
       await pb.collection("device_pairings").update(pairing.id, {
         status: "paired",
+        deviceName,
         client: clientId,
         channel: approvalForm.channel,
         locationLabel,
