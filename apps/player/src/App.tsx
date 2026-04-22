@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.1";
+const appVersion = "0.3.2";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -147,6 +147,8 @@ function App() {
                 settings,
                 setSettings,
                 setDraftSettings,
+                setIsAuthenticated,
+                setIsConnected,
                 setPairingRecord,
                 setPairingSession,
                 setShowConfig,
@@ -221,6 +223,8 @@ function App() {
                 settings,
                 setSettings,
                 setDraftSettings,
+                setIsAuthenticated,
+                setIsConnected,
                 setPairingRecord,
                 setPairingSession,
                 setShowConfig,
@@ -1092,6 +1096,8 @@ async function completePairingLogin(params: {
   settings: Settings;
   setSettings: (value: Settings) => void;
   setDraftSettings: (value: Settings) => void;
+  setIsAuthenticated: (value: boolean) => void;
+  setIsConnected: (value: boolean) => void;
   setPairingRecord: (value: DevicePairingRecord | null) => void;
   setPairingSession: (value: PairingSession | null) => void;
   setShowConfig: (value: boolean) => void;
@@ -1106,12 +1112,14 @@ async function completePairingLogin(params: {
     const authResponse = await params.client
       .collection("screen_users")
       .authWithPassword(params.record.assignedEmail, params.session.installerId);
+    params.client.authStore.save(authResponse.token, authResponse.record);
     authRecordId = authResponse.record.id;
   } catch (primaryError) {
     try {
       const fallbackResponse = await params.client
         .collection("screen_users")
         .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
+      params.client.authStore.save(fallbackResponse.token, fallbackResponse.record);
       resolvedPassword = params.session.pairingCode;
       authRecordId = fallbackResponse.record.id;
     } catch {
@@ -1148,6 +1156,8 @@ async function completePairingLogin(params: {
   });
   params.setSettings(nextSettings);
   params.setDraftSettings(nextSettings);
+  params.setIsAuthenticated(true);
+  params.setIsConnected(true);
   params.setPairingRecord(null);
   params.setPairingSession({
     ...params.session,

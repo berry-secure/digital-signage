@@ -84,6 +84,7 @@ code {
 .glass-topbar {
   position: fixed;
   inset: 1rem 1rem auto 1rem;
+  z-index: 5;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -96,6 +97,7 @@ code {
 .glass-bottom {
   position: fixed;
   inset: auto 1rem 1rem 1rem;
+  z-index: 5;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -214,6 +216,7 @@ code {
 .blackout-overlay {
   background: rgba(3, 3, 4, 0.52);
   pointer-events: auto;
+  z-index: 4;
 }
 
 .unlock-card,
