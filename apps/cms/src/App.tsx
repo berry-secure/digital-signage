@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { createPocketBaseClient, pocketbaseUrl } from "./lib/pocketbase";
 import type {
   ChannelRecord,
@@ -181,6 +181,7 @@ function App() {
   const [playlistForm, setPlaylistForm] = useState(defaultPlaylistForm);
   const [playlistItemForm, setPlaylistItemForm] = useState(defaultPlaylistItemForm);
   const [scheduleForm, setScheduleForm] = useState(defaultScheduleForm);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [eventForm, setEventForm] = useState(defaultEventForm);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(pb.authStore.isValid);
@@ -575,7 +576,29 @@ function App() {
     const email = buildPairingEmail(deviceName, pairingCode);
 
     try {
-      const createdScreen = await pb.collection("screen_users").create({
+      let existingScreen: ScreenUserRecord | null = null;
+
+      if (pairing.screen) {
+        try {
+          existingScreen = await pb.collection("screen_users").getOne<ScreenUserRecord>(pairing.screen);
+        } catch {
+          existingScreen = null;
+        }
+      }
+
+      if (!existingScreen && pairing.assignedEmail) {
+        try {
+          existingScreen = await pb
+            .collection("screen_users")
+            .getFirstListItem<ScreenUserRecord>(
+              `email="${escapeFilterValue(pairing.assignedEmail)}"`
+            );
+        } catch {
+          existingScreen = null;
+        }
+      }
+
+      const screenPayload = {
         email,
         password: pairingCode,
         passwordConfirm: pairingCode,
@@ -590,7 +613,35 @@ function App() {
         deviceModel: pairing.deviceName,
         appVersion: pairing.appVersion,
         networkMode: "dhcp"
-      });
+      };
+
+      let createdScreen: ScreenUserRecord;
+
+      if (existingScreen) {
+        try {
+          createdScreen = await pb.collection("screen_users").update(existingScreen.id, screenPayload);
+        } catch {
+          createdScreen = await pb.collection("screen_users").update(
+            existingScreen.id,
+            compactRecord({
+              email,
+              name: deviceName,
+              client: clientId,
+              channel: pairingForm.channel,
+              locationLabel,
+              volumePercent: Number(pairingForm.volumePercent) || 80,
+              status: "pairing",
+              notes: pairingForm.notes,
+              desiredDisplayState: "active",
+              deviceModel: pairing.deviceName,
+              appVersion: pairing.appVersion,
+              networkMode: "dhcp"
+            })
+          );
+        }
+      } else {
+        createdScreen = await pb.collection("screen_users").create(screenPayload);
+      }
 
       await pb.collection("device_pairings").update(pairing.id, {
         status: "paired",
@@ -764,26 +815,33 @@ function App() {
     event.preventDefault();
 
     try {
-      await pb.collection("schedule_rules").create(
-        compactRecord({
-          client: scheduleForm.client,
-          channel: scheduleForm.channel,
-          playlist: scheduleForm.playlist,
-          label: scheduleForm.label,
-          startDate: toIsoDate(scheduleForm.startDate) || undefined,
-          endDate: toIsoDate(scheduleForm.endDate) || undefined,
-          startTime: scheduleForm.startTime,
-          endTime: scheduleForm.endTime,
-          daysOfWeek: scheduleForm.daysOfWeek,
-          priority: Number(scheduleForm.priority) || 100,
-          isActive: scheduleForm.isActive
-        })
-      );
-      setScheduleForm(defaultScheduleForm);
+      const payload = compactRecord({
+        client: scheduleForm.client,
+        channel: scheduleForm.channel,
+        playlist: scheduleForm.playlist,
+        label: scheduleForm.label,
+        startDate: toIsoDate(scheduleForm.startDate) || undefined,
+        endDate: toIsoDate(scheduleForm.endDate) || undefined,
+        startTime: scheduleForm.startTime,
+        endTime: scheduleForm.endTime,
+        daysOfWeek: scheduleForm.daysOfWeek,
+        priority: Number(scheduleForm.priority) || 100,
+        isActive: scheduleForm.isActive
+      });
+
+      if (editingScheduleId) {
+        await pb.collection("schedule_rules").update(editingScheduleId, payload);
+      } else {
+        await pb.collection("schedule_rules").create(payload);
+      }
+
+      resetScheduleEditor(setScheduleForm, setEditingScheduleId);
       triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
-        text: "Reguła harmonogramu została zapisana."
+        text: editingScheduleId
+          ? "Reguła harmonogramu została zaktualizowana."
+          : "Reguła harmonogramu została zapisana."
       });
     } catch (error) {
       showFlash(setFlash, {
@@ -895,6 +953,9 @@ function App() {
 
     try {
       await pb.collection(collection).delete(id);
+      if (collection === "schedule_rules" && id === editingScheduleId) {
+        resetScheduleEditor(setScheduleForm, setEditingScheduleId);
+      }
       triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
@@ -968,6 +1029,8 @@ function App() {
           <label className="field">
             <span>Email</span>
             <input
+              id="cms-login-email"
+              name="email"
               type="email"
               value={loginForm.email}
               onChange={(event) =>
@@ -981,6 +1044,8 @@ function App() {
           <label className="field">
             <span>Hasło</span>
             <input
+              id="cms-login-password"
+              name="password"
               type="password"
               value={loginForm.password}
               onChange={(event) =>
@@ -1363,7 +1428,7 @@ function App() {
                       pairingCode: normalizePairingCode(value)
                     }))
                   }
-                  placeholder="A7K4P2"
+                  placeholder="A7K4P2Q9"
                   required
                 />
                 <TextField
@@ -1543,6 +1608,29 @@ function App() {
                   <button className="primary-button" type="submit">
                     Zapisz profil
                   </button>
+                  <div className="device-command-row">
+                    <button
+                      className="ghost-button"
+                      onClick={() => void handleQueueCommand(selectedScreen, "sync")}
+                      type="button"
+                    >
+                      Force update
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={() => void handleQueueCommand(selectedScreen, "capture_screenshot")}
+                      type="button"
+                    >
+                      Pobierz screenshot
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={() => void handleQueueCommand(selectedScreen, "restart_app")}
+                      type="button"
+                    >
+                      Restart appki
+                    </button>
+                  </div>
                 </form>
               ) : (
                 <EmptyState text="Nie masz jeszcze żadnego urządzenia do edycji." />
@@ -1597,7 +1685,7 @@ function App() {
                           onClick={() => void handleQueueCommand(screen, "sync")}
                           type="button"
                         >
-                          Sync
+                          Force update
                         </button>
                         <button
                           className="ghost-button"
@@ -1718,6 +1806,8 @@ function App() {
                 <label className="field">
                   <span>Plik</span>
                   <input
+                    id="media-upload-file"
+                    name="mediaFile"
                     type="file"
                     accept="video/*,image/*"
                     onChange={(event) =>
@@ -1946,7 +2036,10 @@ function App() {
 
         {activeSection === "schedule" ? (
           <section className="section-grid">
-            <Panel title="Nowa reguła harmonogramu" subtitle="To ona mówi playerowi co ma grać i kiedy">
+            <Panel
+              title={editingScheduleId ? "Edycja reguły harmonogramu" : "Nowa reguła harmonogramu"}
+              subtitle="To ona mówi playerowi co ma grać i kiedy"
+            >
               <form className="form-grid" onSubmit={handleCreateSchedule}>
                 <SelectField
                   label="Klient"
@@ -2053,8 +2146,17 @@ function App() {
                   }
                 />
                 <button className="primary-button" type="submit">
-                  Dodaj regułę
+                  {editingScheduleId ? "Zapisz zmiany" : "Dodaj regułę"}
                 </button>
+                {editingScheduleId ? (
+                  <button
+                    className="ghost-button"
+                    onClick={() => resetScheduleEditor(setScheduleForm, setEditingScheduleId)}
+                    type="button"
+                  >
+                    Anuluj edycję
+                  </button>
+                ) : null}
               </form>
             </Panel>
 
@@ -2070,13 +2172,25 @@ function App() {
                     meta={`${schedule.daysOfWeek || "all days"} • ${schedule.startTime} → ${schedule.endTime}`}
                     badge={<PriorityBadge value={schedule.priority} />}
                     action={
-                      <button
-                        className="danger-button"
-                        onClick={() => handleDelete("schedule_rules", schedule.id, schedule.label)}
-                        type="button"
-                      >
-                        Usuń
-                      </button>
+                      <div className="device-command-row">
+                        <button
+                          className="ghost-button"
+                          onClick={() => {
+                            setEditingScheduleId(schedule.id);
+                            setScheduleForm(toScheduleForm(schedule));
+                          }}
+                          type="button"
+                        >
+                          Edytuj
+                        </button>
+                        <button
+                          className="danger-button"
+                          onClick={() => handleDelete("schedule_rules", schedule.id, schedule.label)}
+                          type="button"
+                        >
+                          Usuń
+                        </button>
+                      </div>
                     }
                   />
                 ))}
@@ -2244,6 +2358,7 @@ function App() {
                     Po pierwszym uruchomieniu apka wyświetli duży kod parowania. Wpisujesz go potem
                     w sekcji <strong>Add New Device</strong>.
                   </p>
+                  <p>Ten kod jest teraz stały dla konkretnej instalacji aplikacji, jak lekki numer seryjny.</p>
                 </article>
 
                 <article className="mini-card install-card">
@@ -2515,11 +2630,19 @@ function TextField(props: {
   placeholder?: string;
   type?: string;
   required?: boolean;
+  id?: string;
+  name?: string;
 }) {
+  const generatedId = useId();
+  const fieldId = props.id || generatedId;
+  const fieldName = props.name || fieldNameFromLabel(props.label);
+
   return (
-    <label className="field">
+    <label className="field" htmlFor={fieldId}>
       <span>{props.label}</span>
       <input
+        id={fieldId}
+        name={fieldName}
         type={props.type || "text"}
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
@@ -2535,11 +2658,19 @@ function TextAreaField(props: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  id?: string;
+  name?: string;
 }) {
+  const generatedId = useId();
+  const fieldId = props.id || generatedId;
+  const fieldName = props.name || fieldNameFromLabel(props.label);
+
   return (
-    <label className="field field-full">
+    <label className="field field-full" htmlFor={fieldId}>
       <span>{props.label}</span>
       <textarea
+        id={fieldId}
+        name={fieldName}
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
         placeholder={props.placeholder}
@@ -2555,11 +2686,23 @@ function SelectField(props: {
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
   required?: boolean;
+  id?: string;
+  name?: string;
 }) {
+  const generatedId = useId();
+  const fieldId = props.id || generatedId;
+  const fieldName = props.name || fieldNameFromLabel(props.label);
+
   return (
-    <label className="field">
+    <label className="field" htmlFor={fieldId}>
       <span>{props.label}</span>
-      <select value={props.value} onChange={(event) => props.onChange(event.target.value)} required={props.required}>
+      <select
+        id={fieldId}
+        name={fieldName}
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+        required={props.required}
+      >
         {!props.required ? null : <option value="">Wybierz…</option>}
         {props.options.map((option) => (
           <option key={`${option.value}-${option.label}`} value={option.value}>
@@ -2575,11 +2718,19 @@ function ToggleField(props: {
   label: string;
   checked: boolean;
   onChange: (value: boolean) => void;
+  id?: string;
+  name?: string;
 }) {
+  const generatedId = useId();
+  const fieldId = props.id || generatedId;
+  const fieldName = props.name || fieldNameFromLabel(props.label);
+
   return (
-    <label className="toggle-field">
+    <label className="toggle-field" htmlFor={fieldId}>
       <span>{props.label}</span>
       <input
+        id={fieldId}
+        name={fieldName}
         type="checkbox"
         checked={props.checked}
         onChange={(event) => props.onChange(event.target.checked)}
@@ -2617,6 +2768,30 @@ function toDeviceProfileForm(screen: ScreenUserRecord) {
     networkNotes: screen.networkNotes || "",
     notes: screen.notes || ""
   };
+}
+
+function toScheduleForm(schedule: ScheduleRuleRecord) {
+  return {
+    client: schedule.client || "",
+    channel: schedule.channel || "",
+    playlist: schedule.playlist || "",
+    label: schedule.label || "",
+    startDate: formatDateInputValue(schedule.startDate),
+    endDate: formatDateInputValue(schedule.endDate),
+    startTime: schedule.startTime || "08:00",
+    endTime: schedule.endTime || "22:00",
+    daysOfWeek: schedule.daysOfWeek || "1,2,3,4,5,6,0",
+    priority: String(schedule.priority || 100),
+    isActive: schedule.isActive
+  };
+}
+
+function resetScheduleEditor(
+  setScheduleForm: (value: typeof defaultScheduleForm) => void,
+  setEditingScheduleId: (value: string | null) => void
+) {
+  setScheduleForm(defaultScheduleForm);
+  setEditingScheduleId(null);
 }
 
 function getProtectedFileUrl(record: object, fileName: string, token: string) {
@@ -2697,6 +2872,18 @@ function formatDateTime(value: string) {
   }).format(new Date(value));
 }
 
+function formatDateInputValue(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function formatHeartbeat(value: string) {
   if (!value) {
     return "";
@@ -2758,6 +2945,10 @@ function slugify(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
+}
+
+function fieldNameFromLabel(label: string) {
+  return slugify(label) || "field";
 }
 
 function stripExtension(name: string) {

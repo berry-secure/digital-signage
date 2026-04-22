@@ -2,11 +2,15 @@ import { Capacitor } from "@capacitor/core";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPocketBaseClient, defaultPocketBaseUrl } from "./lib/pocketbase";
 import type {
+  ChannelRecord,
+  ClientRecord,
   DeviceCommandRecord,
   DevicePairingRecord,
   EventRecord,
+  MediaAssetRecord,
   PlaybackEntry,
   PlaylistItemRecord,
+  PlaylistRecord,
   ScheduleRuleRecord,
   ScreenUserRecord
 } from "./types";
@@ -14,15 +18,6 @@ import type {
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
 const appVersion = "0.2.0";
-const subscriptions = [
-  "screen_users",
-  "schedule_rules",
-  "events",
-  "playlists",
-  "playlist_items",
-  "media_assets",
-  "device_commands"
-] as const;
 
 type Settings = {
   pocketbaseUrl: string;
@@ -122,6 +117,45 @@ function App() {
           setShowConfig(false);
         }
       } catch {
+        if (pairingSession?.recordId && pairingSession.pairingCode?.length >= 8) {
+          try {
+            const pairing = await refreshPairingRecord(client, pairingSession);
+            if (cancelled) {
+              return;
+            }
+
+            if (
+              pairing.assignedEmail &&
+              pairing.screen &&
+              pairing.status !== "expired"
+            ) {
+              await completePairingLogin({
+                client,
+                record: pairing,
+                session: pairingSession,
+                settings,
+                setSettings,
+                setDraftSettings,
+                setPairingRecord,
+                setPairingSession,
+                setShowConfig,
+                setFlash,
+                setPlaybackUnlocked,
+                setCurrentIndex
+              });
+
+              if (!cancelled) {
+                setIsConnected(true);
+                setShowConfig(false);
+              }
+
+              return;
+            }
+          } catch {
+            // Fall back to config mode below.
+          }
+        }
+
         if (!cancelled) {
           setShowConfig(true);
           setIsConnected(false);
@@ -134,7 +168,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [client, settings.email, settings.password]);
+  }, [client, pairingSession, settings, settings.email, settings.password]);
 
   useEffect(() => {
     if (client.authStore.isValid || settings.email.trim()) {
@@ -166,7 +200,10 @@ function App() {
 
             setPairingRecord(refreshed);
 
-            if (refreshed.status === "paired" && refreshed.assignedEmail) {
+            if (
+              refreshed.assignedEmail &&
+              (refreshed.status === "paired" || refreshed.status === "claimed")
+            ) {
               await completePairingLogin({
                 client,
                 record: refreshed,
@@ -224,8 +261,6 @@ function App() {
     }
 
     let cancelled = false;
-    let debounceTimer = 0;
-
     const runSync = async () => {
       if (cancelled) {
         return;
@@ -265,24 +300,9 @@ function App() {
       void runSync();
     }, 30000);
 
-    const subscribeRealtime = async () => {
-      await Promise.all(
-        subscriptions.map((collectionName) =>
-          client.collection(collectionName).subscribe("*", () => {
-            window.clearTimeout(debounceTimer);
-            debounceTimer = window.setTimeout(() => void runSync(), 220);
-          })
-        )
-      );
-    };
-
-    void subscribeRealtime();
-
     return () => {
       cancelled = true;
-      window.clearTimeout(debounceTimer);
       window.clearInterval(poller);
-      subscriptions.forEach((collectionName) => client.collection(collectionName).unsubscribe("*"));
     };
   }, [client]);
 
@@ -747,6 +767,8 @@ function App() {
             <label className="field">
               <span>PocketBase URL</span>
               <input
+                id="player-pocketbase-url"
+                name="pocketbaseUrl"
                 type="url"
                 value={draftSettings.pocketbaseUrl}
                 onChange={(event) =>
@@ -763,6 +785,8 @@ function App() {
             <label className="field">
               <span>Email ekranu (opcjonalnie)</span>
               <input
+                id="player-screen-email"
+                name="screenEmail"
                 type="email"
                 value={draftSettings.email}
                 onChange={(event) =>
@@ -778,6 +802,8 @@ function App() {
             <label className="field">
               <span>Hasło (opcjonalnie)</span>
               <input
+                id="player-screen-password"
+                name="screenPassword"
                 type="password"
                 value={draftSettings.password}
                 onChange={(event) =>
@@ -814,40 +840,56 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
     return emptySyncState;
   }
 
-  const screen = await client.collection("screen_users").getOne<ScreenUserRecord>(authRecord.id, {
-    expand: "client,channel"
+  const screen = await client.collection("screen_users").getOne<ScreenUserRecord>(authRecord.id);
+
+  const [fileToken, clients, channels, playlists, mediaAssets, schedules, events, playlistItems, pendingCommands] =
+    await Promise.all([
+      safeGetFileToken(client),
+      safeGetFullList<ClientRecord>(client, "clients", {
+        filter: `id="${escapeFilterValue(screen.client)}"`
+      }),
+      safeGetFullList<ChannelRecord>(client, "channels", {
+        filter: `client="${escapeFilterValue(screen.client)}"`
+      }),
+      safeGetFullList<PlaylistRecord>(client, "playlists", {
+        filter: `client="${escapeFilterValue(screen.client)}"`
+      }),
+      safeGetFullList<MediaAssetRecord>(client, "media_assets", {
+        filter: `client="${escapeFilterValue(screen.client)}"`
+      }),
+      safeGetFullList<ScheduleRuleRecord>(client, "schedule_rules", {
+        filter: `client="${escapeFilterValue(screen.client)}" && isActive=true`
+      }),
+      safeGetFullList<EventRecord>(client, "events", {
+        filter: `client="${escapeFilterValue(screen.client)}" && isActive=true`
+      }),
+      safeGetFullList<PlaylistItemRecord>(client, "playlist_items", {
+        filter: `client="${escapeFilterValue(screen.client)}"`
+      }),
+      safeGetFullList<DeviceCommandRecord>(client, "device_commands", {
+        filter: `screen="${escapeFilterValue(screen.id)}" && status="queued"`
+      })
+    ]);
+
+  const hydrated = hydratePlayerData({
+    clients,
+    channels,
+    playlists,
+    mediaAssets,
+    schedules,
+    events,
+    playlistItems,
+    pendingCommands,
+    screen
   });
 
-  const [fileToken, schedules, events, playlistItems, pendingCommands] = await Promise.all([
-    client.files.getToken(),
-    client.collection("schedule_rules").getFullList<ScheduleRuleRecord>({
-      filter: `client="${screen.client}" && isActive=true`,
-      sort: "-priority",
-      expand: "playlist,channel"
-    }),
-    client.collection("events").getFullList<EventRecord>({
-      filter: `client="${screen.client}" && isActive=true`,
-      sort: "-priority,-startsAt",
-      expand: "playlist,channel"
-    }),
-    client.collection("playlist_items").getFullList<PlaylistItemRecord>({
-      filter: `client="${screen.client}"`,
-      sort: "playlist,sortOrder",
-      expand: "playlist,mediaAsset"
-    }),
-    client.collection("device_commands").getFullList<DeviceCommandRecord>({
-      filter: `screen="${screen.id}" && status="queued"`,
-      sort: "created"
-    })
-  ]);
-
   const activeEvent =
-    events
+    hydrated.events
       .filter((event) => eventMatches(event, screen))
       .sort((left, right) => right.priority - left.priority)[0] || null;
 
   const activeSchedule =
-    schedules
+    hydrated.schedules
       .filter((schedule) => scheduleMatches(schedule, screen))
       .sort((left, right) => right.priority - left.priority)[0] || null;
 
@@ -859,7 +901,7 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
 
   const queue = activePlaylistId
     ? buildQueue(
-        playlistItems.filter((item) => item.playlist === activePlaylistId),
+        hydrated.playlistItems.filter((item) => item.playlist === activePlaylistId),
         client,
         fileToken,
         activePlaylistId,
@@ -869,11 +911,11 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
     : [];
 
   return {
-    screen,
+    screen: hydrated.screen,
     queue,
     activeSchedule,
     activeEvent,
-    pendingCommands,
+    pendingCommands: hydrated.pendingCommands,
     lastSyncAt: new Date().toISOString()
   };
 }
@@ -922,9 +964,42 @@ async function ensurePairingSession(
   if (existing?.recordId && existing.pairingCode?.length >= 8) {
     try {
       const record = await refreshPairingRecord(client, existing);
-      if (record.status !== "claimed" && record.status !== "expired") {
+      if (record.status !== "expired") {
         return {
-          session: existing,
+          session: {
+            ...existing,
+            pairingCode: record.pairingCode || existing.pairingCode
+          },
+          record
+        };
+      }
+    } catch {
+      // Try to recover the record by the stable installer id before creating a new one.
+    }
+  }
+
+  if (existing?.installerId && existing.pairingCode?.length >= 8) {
+    try {
+      const record = await client
+        .collection("device_pairings")
+        .getFirstListItem<DevicePairingRecord>(
+          `installerId="${escapeFilterValue(existing.installerId)}"`
+        );
+
+      if (record.status !== "expired") {
+        await client.collection("device_pairings").update(record.id, {
+          lastSeenAt: new Date().toISOString(),
+          deviceName: getDeviceDescriptor(),
+          platform: Capacitor.getPlatform(),
+          appVersion
+        });
+
+        return {
+          session: {
+            ...existing,
+            recordId: record.id,
+            pairingCode: record.pairingCode || existing.pairingCode
+          },
           record
         };
       }
@@ -933,11 +1008,16 @@ async function ensurePairingSession(
     }
   }
 
+  const preservedPairingCode =
+    existing && typeof existing.pairingCode === "string" && existing.pairingCode.length >= 8
+      ? existing.pairingCode
+      : generatePairingCode();
+
   const session: PairingSession = {
-    recordId: "",
-    installerId: crypto.randomUUID(),
-    pairingCode: generatePairingCode(),
-    createdAt: new Date().toISOString()
+    recordId: existing?.recordId || "",
+    installerId: existing?.installerId || crypto.randomUUID(),
+    pairingCode: preservedPairingCode,
+    createdAt: existing?.createdAt || new Date().toISOString()
   };
 
   const record = await client.collection("device_pairings").create<DevicePairingRecord>({
@@ -992,41 +1072,32 @@ async function completePairingLogin(params: {
     .collection("screen_users")
     .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
 
-  let storedPassword = params.session.pairingCode;
-
-  try {
-    const rotatedPassword = generateSecret(24);
-    const authId = params.client.authStore.record?.id;
-    if (authId) {
-      await params.client.collection("screen_users").update(authId, {
-        oldPassword: params.session.pairingCode,
-        password: rotatedPassword,
-        passwordConfirm: rotatedPassword,
-        status: "online"
-      });
-      storedPassword = rotatedPassword;
-    }
-  } catch {
-    storedPassword = params.session.pairingCode;
-  }
-
   const nextSettings = {
     pocketbaseUrl: params.settings.pocketbaseUrl,
     email: params.record.assignedEmail,
-    password: storedPassword
+    password: params.session.pairingCode
   };
 
   await params.client.collection("device_pairings").update(params.record.id, {
     status: "claimed",
-    claimedAt: new Date().toISOString()
+    claimedAt: new Date().toISOString(),
+    lastSeenAt: new Date().toISOString()
   });
 
-  clearPairingSession();
   saveSettings(nextSettings);
+  savePairingSession({
+    ...params.session,
+    recordId: params.record.id,
+    pairingCode: params.record.pairingCode || params.session.pairingCode
+  });
   params.setSettings(nextSettings);
   params.setDraftSettings(nextSettings);
   params.setPairingRecord(null);
-  params.setPairingSession(null);
+  params.setPairingSession({
+    ...params.session,
+    recordId: params.record.id,
+    pairingCode: params.record.pairingCode || params.session.pairingCode
+  });
   params.setShowConfig(false);
   params.setPlaybackUnlocked(false);
   params.setCurrentIndex(0);
@@ -1356,9 +1427,145 @@ function generatePairingCode() {
   return Array.from({ length: 8 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
-function generateSecret(length: number) {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%";
-  return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+async function safeGetFileToken(client: ReturnType<typeof createPocketBaseClient>) {
+  try {
+    return await client.files.getToken();
+  } catch {
+    return "";
+  }
+}
+
+async function safeGetFullList<T>(
+  client: ReturnType<typeof createPocketBaseClient>,
+  collectionName: string,
+  options?: Record<string, unknown>
+) {
+  try {
+    return await client.collection(collectionName).getFullList<T>(options);
+  } catch {
+    return [] as T[];
+  }
+}
+
+function hydratePlayerData(data: {
+  clients: ClientRecord[];
+  channels: ChannelRecord[];
+  playlists: PlaylistRecord[];
+  mediaAssets: MediaAssetRecord[];
+  schedules: ScheduleRuleRecord[];
+  events: EventRecord[];
+  playlistItems: PlaylistItemRecord[];
+  pendingCommands: DeviceCommandRecord[];
+  screen: ScreenUserRecord;
+}) {
+  const clientsById = new Map(data.clients.map((client) => [client.id, client]));
+  const channelsById = new Map(data.channels.map((channel) => [channel.id, channel]));
+  const playlistsById = new Map(
+    data.playlists.map((playlist) => [
+      playlist.id,
+      {
+        ...playlist,
+        expand: {
+          client: clientsById.get(playlist.client),
+          channel: channelsById.get(playlist.channel)
+        }
+      }
+    ])
+  );
+  const mediaAssetsById = new Map(
+    data.mediaAssets.map((asset) => [
+      asset.id,
+      {
+        ...asset,
+        expand: {
+          client: clientsById.get(asset.client)
+        }
+      }
+    ])
+  );
+
+  const screen = {
+    ...data.screen,
+    expand: {
+      ...data.screen.expand,
+      client: clientsById.get(data.screen.client),
+      channel: channelsById.get(data.screen.channel)
+    }
+  };
+
+  const schedules = [...data.schedules]
+    .map((schedule) => ({
+      ...schedule,
+      expand: {
+        ...schedule.expand,
+        playlist: playlistsById.get(schedule.playlist),
+        channel: channelsById.get(schedule.channel)
+      }
+    }))
+    .sort((left, right) => right.priority - left.priority || compareText(left.label, right.label));
+
+  const events = [...data.events]
+    .map((event) => ({
+      ...event,
+      expand: {
+        ...event.expand,
+        playlist: playlistsById.get(event.playlist),
+        channel: channelsById.get(event.channel)
+      }
+    }))
+    .sort(
+      (left, right) =>
+        right.priority - left.priority || compareDateDesc(left.startsAt, right.startsAt)
+    );
+
+  const playlistItems = [...data.playlistItems]
+    .map((item) => ({
+      ...item,
+      expand: {
+        ...item.expand,
+        playlist: playlistsById.get(item.playlist),
+        mediaAsset: mediaAssetsById.get(item.mediaAsset)
+      }
+    }))
+    .sort(
+      (left, right) =>
+        compareText(left.playlist, right.playlist) || left.sortOrder - right.sortOrder
+    );
+
+  const pendingCommands = [...data.pendingCommands].sort((left, right) =>
+    compareDateAsc(left.created, right.created)
+  );
+
+  return {
+    screen,
+    schedules,
+    events,
+    playlistItems,
+    pendingCommands
+  };
+}
+
+function compareText(left: string, right: string) {
+  return String(left || "").localeCompare(String(right || ""), "pl", {
+    sensitivity: "base",
+    numeric: true
+  });
+}
+
+function compareDateAsc(left: string, right: string) {
+  const leftValue = left ? new Date(left).getTime() : 0;
+  const rightValue = right ? new Date(right).getTime() : 0;
+  return leftValue - rightValue;
+}
+
+function compareDateDesc(left: string, right: string) {
+  const leftValue = left ? new Date(left).getTime() : 0;
+  const rightValue = right ? new Date(right).getTime() : 0;
+  return rightValue - leftValue;
+}
+
+function escapeFilterValue(value: string) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 export default App;
