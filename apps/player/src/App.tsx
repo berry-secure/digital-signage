@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.4";
+const appVersion = "0.3.5";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -39,6 +39,11 @@ type SyncState = {
   activeEvent: EventRecord | null;
   pendingCommands: DeviceCommandRecord[];
   lastSyncAt: string;
+};
+
+type BootstrapState = {
+  phase: "idle" | "waiting" | "approval-detected" | "authenticating" | "syncing" | "online" | "error";
+  detail: string;
 };
 
 const defaultSettings: Settings = {
@@ -75,6 +80,12 @@ function App() {
   const [isConnected, setIsConnected] = useState(client.authStore.isValid);
   const [isAuthenticated, setIsAuthenticated] = useState(client.authStore.isValid);
   const [displayMode, setDisplayMode] = useState<"active" | "blackout">("active");
+  const [bootstrapState, setBootstrapState] = useState<BootstrapState>({
+    phase: client.authStore.isValid ? "online" : "idle",
+    detail: client.authStore.isValid
+      ? "Urządzenie ma aktywną sesję i ładuje dane odtwarzania."
+      : "Urządzenie czeka na rejestrację w CMS."
+  });
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const imageTimerRef = useRef<number | null>(null);
@@ -97,12 +108,40 @@ function App() {
   useEffect(() => {
     setIsAuthenticated(client.authStore.isValid);
     setIsConnected(client.authStore.isValid);
+    setBootstrapState(
+      client.authStore.isValid
+        ? {
+            phase: "online",
+            detail: "Sesja ekranowa jest aktywna."
+          }
+        : {
+            phase: settings.email.trim() ? "authenticating" : "waiting",
+            detail: settings.email.trim()
+              ? "Urządzenie ma zapisane konto ekranowe i próbuje połączyć się z CMS."
+              : "Urządzenie czeka na zatwierdzenie w CMS."
+          }
+    );
 
     return client.authStore.onChange(() => {
       setIsAuthenticated(client.authStore.isValid);
       setIsConnected(client.authStore.isValid);
+      setBootstrapState((current) =>
+        client.authStore.isValid
+          ? {
+              phase: "online",
+              detail: current.phase === "syncing" ? current.detail : "Sesja ekranowa jest aktywna."
+            }
+          : current.phase === "error"
+            ? current
+            : {
+                phase: settings.email.trim() ? "authenticating" : "waiting",
+                detail: settings.email.trim()
+                  ? "Urządzenie ma zapisane konto ekranowe i próbuje połączyć się z CMS."
+                  : "Urządzenie czeka na zatwierdzenie w CMS."
+              }
+      );
     });
-  }, [client]);
+  }, [client, settings.email]);
 
   useEffect(() => {
     if (!queueSignature) {
@@ -122,6 +161,10 @@ function App() {
 
     const reconnect = async () => {
       try {
+        setBootstrapState({
+          phase: "authenticating",
+          detail: `Logowanie zapisanym kontem ${settings.email}.`
+        });
         await signInScreenUser(
           client,
           settings.pocketbaseUrl || defaultPocketBaseUrl,
@@ -129,6 +172,10 @@ function App() {
           settings.password
         );
         if (!cancelled) {
+          setBootstrapState({
+            phase: "syncing",
+            detail: "Logowanie zakończone. Trwa pobieranie ekranu, playlisty i komend."
+          });
           setIsConnected(true);
           setShowConfig(false);
         }
@@ -145,6 +192,10 @@ function App() {
               pairing.screen &&
               pairing.status !== "expired"
             ) {
+              setBootstrapState({
+                phase: "approval-detected",
+                detail: `CMS zatwierdził urządzenie jako ${pairing.assignedEmail}. Trwa bootstrap playera.`
+              });
               await completePairingLogin({
                 client,
                 record: pairing,
@@ -159,7 +210,11 @@ function App() {
                 setShowConfig,
                 setFlash,
                 setPlaybackUnlocked,
-                setCurrentIndex
+                setCurrentIndex,
+                setSyncState,
+                setDisplayMode,
+                setSyncing,
+                setBootstrapState
               });
 
               if (!cancelled) {
@@ -176,6 +231,10 @@ function App() {
 
         if (!cancelled) {
           setIsConnected(false);
+          setBootstrapState({
+            phase: "error",
+            detail: "Nie udało się zalogować zapisanym kontem ani dokończyć bootstrapu po zatwierdzeniu."
+          });
         }
       }
     };
@@ -207,6 +266,10 @@ function App() {
         setPairingRecord(ensured.record);
         savePairingSession(ensured.session);
         setIsConnected(true);
+        setBootstrapState({
+          phase: "waiting",
+          detail: `Urządzenie oczekuje w CMS jako ID ${ensured.record.pairingCode}.`
+        });
 
         const poll = async () => {
           try {
@@ -221,6 +284,10 @@ function App() {
               refreshed.assignedEmail &&
               (refreshed.status === "paired" || refreshed.status === "claimed")
             ) {
+              setBootstrapState({
+                phase: "approval-detected",
+                detail: `CMS zatwierdził urządzenie jako ${refreshed.assignedEmail}. Trwa logowanie i synchronizacja.`
+              });
               await completePairingLogin({
                 client,
                 record: refreshed,
@@ -235,12 +302,20 @@ function App() {
                 setShowConfig,
                 setFlash,
                 setPlaybackUnlocked,
-                setCurrentIndex
+                setCurrentIndex,
+                setSyncState,
+                setDisplayMode,
+                setSyncing,
+                setBootstrapState
               });
             }
           } catch (error) {
             if (!cancelled) {
               setIsConnected(false);
+              setBootstrapState({
+                phase: "error",
+                detail: readError(error, "Nie udało się odświeżyć zgłoszenia urządzenia.")
+              });
               showFlash(setFlash, {
                 kind: "error",
                 text: readError(error, "Nie udało się odświeżyć zgłoszenia urządzenia.")
@@ -256,6 +331,10 @@ function App() {
       } catch (error) {
         if (!cancelled) {
           setIsConnected(false);
+          setBootstrapState({
+            phase: "error",
+            detail: readError(error, "Nie udało się uruchomić trybu rejestracji urządzenia.")
+          });
           showFlash(setFlash, {
             kind: "error",
             text: readError(error, "Nie udało się uruchomić trybu rejestracji urządzenia.")
@@ -297,6 +376,12 @@ function App() {
         setSyncState(nextState);
         setDisplayMode(nextState.screen?.desiredDisplayState || "active");
         setIsConnected(true);
+        setBootstrapState({
+          phase: "online",
+          detail: nextState.queue.length
+            ? `Player zsynchronizowany. Kolejka zawiera ${nextState.queue.length} materiał(y).`
+            : "Player zsynchronizowany. Brak aktywnej kolejki odtwarzania."
+        });
       } catch (error) {
         if (!cancelled) {
           showFlash(setFlash, {
@@ -304,6 +389,10 @@ function App() {
             text: readError(error, "Player nie mógł zsynchronizować danych.")
           });
           setIsConnected(false);
+          setBootstrapState({
+            phase: "error",
+            detail: readError(error, "Player nie mógł zsynchronizować danych.")
+          });
         }
       } finally {
         if (!cancelled) {
@@ -614,6 +703,10 @@ function App() {
     setDisplayMode("active");
     setIsConnected(false);
     setShowConfig(false);
+    setBootstrapState({
+      phase: "waiting",
+      detail: "Urządzenie zostało rozłączone i wróciło do kolejki oczekujących."
+    });
     showFlash(setFlash, {
       kind: "success",
       text: "Urządzenie zostało rozłączone i wróciło do kolejki oczekujących w CMS."
@@ -626,11 +719,19 @@ function App() {
       setPairingSession(ensured.session);
       setPairingRecord(ensured.record);
       savePairingSession(ensured.session);
+      setBootstrapState({
+        phase: "waiting",
+        detail: `Odświeżono zgłoszenie urządzenia ${ensured.record.pairingCode}.`
+      });
       showFlash(setFlash, {
         kind: "success",
         text: "Zgłoszenie urządzenia zostało odświeżone w CMS."
       });
     } catch (error) {
+      setBootstrapState({
+        phase: "error",
+        detail: readError(error, "Nie udało się odświeżyć zgłoszenia urządzenia.")
+      });
       showFlash(setFlash, {
         kind: "error",
         text: readError(error, "Nie udało się odświeżyć zgłoszenia urządzenia.")
@@ -760,6 +861,11 @@ function App() {
               <strong>{appVersion}</strong>
               <small>{Capacitor.getPlatform()}</small>
             </div>
+            <div className="pairing-meta">
+              <span>Status bootstrapu</span>
+              <strong>{formatBootstrapPhase(bootstrapState.phase)}</strong>
+              <small>{bootstrapState.detail}</small>
+            </div>
             <div className="pairing-actions">
               <button className="ghost-button" onClick={() => void refreshDeviceRegistration()} type="button">
                 Odśwież zgłoszenie
@@ -791,6 +897,11 @@ function App() {
               <span>APK</span>
               <strong>{appVersion}</strong>
               <small>{Capacitor.getPlatform()}</small>
+            </div>
+            <div className="pairing-meta">
+              <span>Status bootstrapu</span>
+              <strong>{formatBootstrapPhase(bootstrapState.phase)}</strong>
+              <small>{bootstrapState.detail}</small>
             </div>
           </div>
         </div>
@@ -1056,7 +1167,6 @@ async function ensurePairingSession(
       const refreshed = await client.collection("device_pairings").update<DevicePairingRecord>(record.id, {
         status: record.status === "expired" ? "waiting" : record.status,
         lastSeenAt: new Date().toISOString(),
-        deviceName: getDeviceDescriptor(),
         platform: Capacitor.getPlatform(),
         appVersion
       });
@@ -1112,7 +1222,6 @@ async function refreshPairingRecord(
 ) {
   await client.collection("device_pairings").update(session.recordId, {
     lastSeenAt: new Date().toISOString(),
-    deviceName: getDeviceDescriptor(),
     platform: Capacitor.getPlatform(),
     appVersion
   });
@@ -1135,7 +1244,15 @@ async function completePairingLogin(params: {
   setFlash: (value: { kind: "success" | "error"; text: string } | null) => void;
   setPlaybackUnlocked: (value: boolean) => void;
   setCurrentIndex: (value: number) => void;
+  setSyncState: (value: SyncState) => void;
+  setDisplayMode: (value: "active" | "blackout") => void;
+  setSyncing: (value: boolean) => void;
+  setBootstrapState: (value: BootstrapState) => void;
 }) {
+  params.setBootstrapState({
+    phase: "authenticating",
+    detail: `Logowanie kontem ${params.record.assignedEmail}.`
+  });
   let resolvedPassword = params.session.installerId;
   let authRecordId = "";
 
@@ -1179,13 +1296,16 @@ async function completePairingLogin(params: {
   params.setDraftSettings(nextSettings);
   params.setIsAuthenticated(true);
   params.setIsConnected(true);
-  params.setPairingRecord(null);
-  params.setPairingSession(nextSession);
   params.setShowConfig(false);
   params.setPlaybackUnlocked(false);
   params.setCurrentIndex(0);
+  params.setSyncing(true);
+  params.setBootstrapState({
+    phase: "syncing",
+    detail: "Logowanie zakończone. Trwa pierwsza synchronizacja playera."
+  });
 
-  void Promise.allSettled([
+  await Promise.allSettled([
     authRecordId
       ? params.client.collection("screen_users").update(authRecordId, {
           status: "online",
@@ -1201,14 +1321,23 @@ async function completePairingLogin(params: {
     })
   ]);
 
+  const nextState = await syncPlayer(params.client);
+  params.setSyncState(nextState);
+  params.setDisplayMode(nextState.screen?.desiredDisplayState || "active");
+  params.setPairingRecord(null);
+  params.setPairingSession(nextSession);
+  params.setBootstrapState({
+    phase: "online",
+    detail: nextState.queue.length
+      ? `Bootstrap zakończony. Kolejka zawiera ${nextState.queue.length} materiał(y).`
+      : "Bootstrap zakończony. Brak aktywnej playlisty dla tego ekranu."
+  });
+  params.setSyncing(false);
+
   showFlash(params.setFlash, {
     kind: "success",
-    text: "Urządzenie zostało sparowane i loguje się do playera."
+    text: "Urządzenie zostało sparowane i zsynchronizowane z CMS."
   });
-
-  window.setTimeout(() => {
-    window.location.reload();
-  }, 180);
 }
 
 async function captureSnapshot(
@@ -1443,6 +1572,25 @@ function loadPairingSession() {
 
 function savePairingSession(session: PairingSession) {
   window.localStorage.setItem(pairingStorageKey, JSON.stringify(session));
+}
+
+function formatBootstrapPhase(phase: BootstrapState["phase"]) {
+  switch (phase) {
+    case "waiting":
+      return "waiting";
+    case "approval-detected":
+      return "approval detected";
+    case "authenticating":
+      return "authenticating";
+    case "syncing":
+      return "syncing";
+    case "online":
+      return "online";
+    case "error":
+      return "error";
+    default:
+      return "idle";
+  }
 }
 
 async function signInScreenUser(
