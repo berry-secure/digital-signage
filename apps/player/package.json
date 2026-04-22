@@ -10,8 +10,9 @@
     "cap:sync": "npx cap sync",
     "cap:add:android": "npx cap add android",
     "android:open": "npx cap open android",
-    "android:build:debug": "cd android && ./gradlew assembleDebug",
-    "android:build:release": "cd android && ./gradlew assembleRelease"
+    "android:prepare": "npm run build && npm run cap:sync",
+    "android:build:debug": "npm run android:prepare && cd android && ./gradlew assembleDebug",
+    "android:build:release": "npm run android:prepare && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^7.2.0",
