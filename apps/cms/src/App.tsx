@@ -53,7 +53,7 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "clients", label: "Klienci", hint: "tenanci i branding" },
   { key: "channels", label: "Kanały", hint: "grupy ekranów" },
   { key: "users", label: "Użytkownicy", hint: "konta do CMS" },
-  { key: "screens", label: "Urządzenia", hint: "pairing, screenshoty, komendy" },
+  { key: "screens", label: "Urządzenia", hint: "oczekujące, aktywne, komendy" },
   { key: "media", label: "Media", hint: "wideo i assety" },
   { key: "playlists", label: "Playlisty", hint: "kolejność emisji" },
   { key: "schedule", label: "Scheduling", hint: "czas emisji" },
@@ -83,8 +83,8 @@ const defaultCmsUserForm = {
   client: ""
 };
 
-const defaultPairingForm = {
-  pairingCode: "",
+const defaultApprovalForm = {
+  pairingId: "",
   name: "",
   client: "",
   channel: "",
@@ -95,6 +95,10 @@ const defaultPairingForm = {
 
 const defaultDeviceProfileForm = {
   screen: "",
+  name: "",
+  client: "",
+  channel: "",
+  locationLabel: "",
   volumePercent: "80",
   desiredDisplayState: "active",
   networkMode: "dhcp",
@@ -173,7 +177,7 @@ function App() {
   const [clientForm, setClientForm] = useState(defaultClientForm);
   const [channelForm, setChannelForm] = useState(defaultChannelForm);
   const [cmsUserForm, setCmsUserForm] = useState(defaultCmsUserForm);
-  const [pairingForm, setPairingForm] = useState(defaultPairingForm);
+  const [approvalForm, setApprovalForm] = useState(defaultApprovalForm);
   const [selectedScreenId, setSelectedScreenId] = useState<string>("");
   const [deviceProfileForm, setDeviceProfileForm] = useState(defaultDeviceProfileForm);
   const [mediaForm, setMediaForm] = useState(defaultMediaForm);
@@ -324,6 +328,16 @@ function App() {
     setDeviceProfileForm(toDeviceProfileForm(screen));
   }, [selectedScreenId, dashboard.screens]);
 
+  useEffect(() => {
+    if (!approvalForm.pairingId) {
+      return;
+    }
+
+    if (!dashboard.devicePairings.some((entry) => entry.id === approvalForm.pairingId)) {
+      setApprovalForm(defaultApprovalForm);
+    }
+  }, [approvalForm.pairingId, dashboard.devicePairings]);
+
   const onlineScreens = useMemo(
     () => dashboard.screens.filter((screen) => isOnline(screen.lastSeenAt)).length,
     [dashboard.screens]
@@ -345,6 +359,11 @@ function App() {
     [dashboard.devicePairings]
   );
 
+  const waitingPairingRecords = useMemo(
+    () => dashboard.devicePairings.filter((entry) => entry.status === "waiting"),
+    [dashboard.devicePairings]
+  );
+
   const recentCommands = useMemo(() => dashboard.deviceCommands.slice(0, 10), [dashboard.deviceCommands]);
 
   const playlistCards = useMemo(
@@ -361,6 +380,11 @@ function App() {
   const selectedScreen = useMemo(
     () => dashboard.screens.find((screen) => screen.id === selectedScreenId) ?? null,
     [dashboard.screens, selectedScreenId]
+  );
+
+  const selectedProvisioning = useMemo(
+    () => dashboard.devicePairings.find((entry) => entry.screen === selectedScreenId) ?? null,
+    [dashboard.devicePairings, selectedScreenId]
   );
 
   const canSeeAllClients = authRecord?.role === "owner" || !authRecord?.client;
@@ -535,25 +559,22 @@ function App() {
     }
   }
 
-  async function handlePairDevice(event: FormEvent<HTMLFormElement>) {
+  async function handleApproveWaitingDevice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const pairingCode = normalizePairingCode(pairingForm.pairingCode);
-    const pairing =
-      (await findWaitingPairingByCode(pairingCode)) ||
-      dashboard.devicePairings.find(
-        (entry) => normalizePairingCode(entry.pairingCode) === pairingCode && entry.status === "waiting"
-      );
+    const pairing = dashboard.devicePairings.find(
+      (entry) => entry.id === approvalForm.pairingId && entry.status === "waiting"
+    );
 
     if (!pairing) {
       showFlash(setFlash, {
         kind: "error",
-        text: "Nie znaleziono aktywnego kodu parowania. Sprawdź ekran TV i spróbuj ponownie."
+        text: "Wybierz urządzenie oczekujące, które chcesz zatwierdzić."
       });
       return;
     }
 
-    const clientId = pairingForm.client || authRecord?.client || "";
+    const clientId = approvalForm.client || authRecord?.client || "";
     if (!clientId) {
       showFlash(setFlash, {
         kind: "error",
@@ -562,7 +583,7 @@ function App() {
       return;
     }
 
-    if (!pairingForm.channel) {
+    if (!approvalForm.channel) {
       showFlash(setFlash, {
         kind: "error",
         text: "Wybierz kanał, do którego przypniesz urządzenie."
@@ -570,10 +591,11 @@ function App() {
       return;
     }
 
-    const deviceName = pairingForm.name.trim() || pairing.deviceName || `Android TV ${pairingCode}`;
+    const deviceName =
+      approvalForm.name.trim() || pairing.deviceName || `Android TV ${pairing.pairingCode}`;
     const locationLabel =
-      pairingForm.locationLabel.trim() || pairing.locationLabel || `${deviceName} / nowa instalacja`;
-    const email = buildPairingEmail(deviceName, pairingCode);
+      approvalForm.locationLabel.trim() || pairing.locationLabel || `${deviceName} / nowa instalacja`;
+    const email = buildScreenEmailFromInstallerId(deviceName, pairing.installerId);
 
     try {
       let existingScreen: ScreenUserRecord | null = null;
@@ -586,29 +608,32 @@ function App() {
         }
       }
 
-      if (!existingScreen && pairing.assignedEmail) {
+      if (!existingScreen) {
         try {
           existingScreen = await pb
             .collection("screen_users")
             .getFirstListItem<ScreenUserRecord>(
-              `email="${escapeFilterValue(pairing.assignedEmail)}"`
+              `email="${escapeFilterValue(email)}"`
             );
         } catch {
           existingScreen = null;
         }
       }
 
+      if (existingScreen && existingScreen.email !== email) {
+        await pb.collection("screen_users").delete(existingScreen.id);
+        existingScreen = null;
+      }
+
       const screenPayload = {
         email,
-        password: pairingCode,
-        passwordConfirm: pairingCode,
         name: deviceName,
         client: clientId,
-        channel: pairingForm.channel,
+        channel: approvalForm.channel,
         locationLabel,
-        volumePercent: Number(pairingForm.volumePercent) || 80,
-        status: "pairing",
-        notes: pairingForm.notes,
+        volumePercent: Number(approvalForm.volumePercent) || 80,
+        status: "offline",
+        notes: approvalForm.notes,
         desiredDisplayState: "active",
         deviceModel: pairing.deviceName,
         appVersion: pairing.appVersion,
@@ -618,52 +643,35 @@ function App() {
       let createdScreen: ScreenUserRecord;
 
       if (existingScreen) {
-        try {
-          createdScreen = await pb.collection("screen_users").update(existingScreen.id, screenPayload);
-        } catch {
-          createdScreen = await pb.collection("screen_users").update(
-            existingScreen.id,
-            compactRecord({
-              email,
-              name: deviceName,
-              client: clientId,
-              channel: pairingForm.channel,
-              locationLabel,
-              volumePercent: Number(pairingForm.volumePercent) || 80,
-              status: "pairing",
-              notes: pairingForm.notes,
-              desiredDisplayState: "active",
-              deviceModel: pairing.deviceName,
-              appVersion: pairing.appVersion,
-              networkMode: "dhcp"
-            })
-          );
-        }
+        createdScreen = await pb.collection("screen_users").update(existingScreen.id, screenPayload);
       } else {
-        createdScreen = await pb.collection("screen_users").create(screenPayload);
+        createdScreen = await pb.collection("screen_users").create({
+          ...screenPayload,
+          password: pairing.installerId,
+          passwordConfirm: pairing.installerId
+        });
       }
 
       await pb.collection("device_pairings").update(pairing.id, {
         status: "paired",
         client: clientId,
-        channel: pairingForm.channel,
+        channel: approvalForm.channel,
         locationLabel,
         screen: createdScreen.id,
-        assignedEmail: email,
-        claimedAt: new Date().toISOString()
+        assignedEmail: email
       });
 
-      setPairingForm(defaultPairingForm);
+      setApprovalForm(defaultApprovalForm);
       setSelectedScreenId(createdScreen.id);
       triggerRefresh();
       showFlash(setFlash, {
         kind: "success",
-        text: `Urządzenie sparowane. Player zaloguje się jako ${email}.`
+        text: `Urządzenie zostało zatwierdzone. Player zaloguje się jako ${email}.`
       });
     } catch (error) {
       showFlash(setFlash, {
         kind: "error",
-        text: readError(error, "Nie udało się sparować urządzenia.")
+        text: readError(error, "Nie udało się zatwierdzić urządzenia.")
       });
     }
   }
@@ -683,6 +691,10 @@ function App() {
 
     try {
       await pb.collection("screen_users").update(selectedScreen.id, {
+        name: deviceProfileForm.name,
+        client: deviceProfileForm.client,
+        channel: deviceProfileForm.channel,
+        locationLabel: deviceProfileForm.locationLabel,
         volumePercent: Number(deviceProfileForm.volumePercent) || 80,
         desiredDisplayState: nextDisplayState,
         networkMode: deviceProfileForm.networkMode,
@@ -694,6 +706,15 @@ function App() {
         notes: deviceProfileForm.notes
       });
 
+      if (selectedProvisioning) {
+        await pb.collection("device_pairings").update(selectedProvisioning.id, {
+          client: deviceProfileForm.client,
+          channel: deviceProfileForm.channel,
+          locationLabel: deviceProfileForm.locationLabel,
+          deviceName: deviceProfileForm.name
+        });
+      }
+
       if (selectedScreen.desiredDisplayState !== nextDisplayState) {
         await queueDeviceCommand(
           selectedScreen.id,
@@ -701,6 +722,8 @@ function App() {
           false
         );
       }
+
+      await queueDeviceCommand(selectedScreen.id, "sync", false);
 
       triggerRefresh();
       showFlash(setFlash, {
@@ -952,9 +975,25 @@ function App() {
     }
 
     try {
+      if (collection === "screen_users") {
+        const screen = dashboard.screens.find((entry) => entry.id === id) ?? null;
+        const relatedPairings = dashboard.devicePairings.filter(
+          (entry) => entry.screen === id || (screen ? entry.assignedEmail === screen.email : false)
+        );
+
+        await Promise.all(
+          relatedPairings.map((entry) =>
+            pb.collection("device_pairings").delete(entry.id).catch(() => undefined)
+          )
+        );
+      }
+
       await pb.collection(collection).delete(id);
       if (collection === "schedule_rules" && id === editingScheduleId) {
         resetScheduleEditor(setScheduleForm, setEditingScheduleId);
+      }
+      if (collection === "device_pairings" && approvalForm.pairingId === id) {
+        setApprovalForm(defaultApprovalForm);
       }
       triggerRefresh();
       showFlash(setFlash, {
@@ -1134,12 +1173,12 @@ function App() {
                 <StatCard label="Kanały" value={String(dashboard.channels.length)} />
                 <StatCard label="Użytkownicy CMS" value={String(dashboard.cmsUsers.length)} />
                 <StatCard label="Ekrany online" value={String(onlineScreens)} />
-                <StatCard label="Pairing w kolejce" value={String(waitingPairings)} />
+                <StatCard label="Urządzenia oczekujące" value={String(waitingPairings)} />
                 <StatCard label="Biblioteka media" value={String(dashboard.mediaAssets.length)} />
               </div>
             </Panel>
 
-            <Panel title="Nowe urządzenia" subtitle="Kody gotowe do wpisania w sekcji Add New Device">
+            <Panel title="Nowe urządzenia" subtitle="Instalacje playera, które czekają na zatwierdzenie w CMS">
               <div className="list-stack">
                 {dashboard.devicePairings
                   .filter((pairing) => pairing.status === "waiting")
@@ -1149,12 +1188,12 @@ function App() {
                       key={pairing.id}
                       title={pairing.deviceName}
                       subtitle={`${pairing.platform || "platforma?"} • ${pairing.appVersion || "brak wersji"}`}
-                      meta={`kod ${pairing.pairingCode} • wygasa ${formatDateTime(pairing.pairingExpiresAt)}`}
+                      meta={`ID ${pairing.pairingCode} • ostatni heartbeat ${formatHeartbeat(pairing.lastSeenAt) || "brak"}`}
                       badge={<span className="soft-badge">{pairing.status}</span>}
                     />
                   ))}
                 {!waitingPairings ? (
-                  <EmptyState text="Nie ma urządzeń czekających na sparowanie." />
+                  <EmptyState text="Nie ma urządzeń oczekujących na zatwierdzenie." />
                 ) : null}
               </div>
             </Panel>
@@ -1417,30 +1456,32 @@ function App() {
 
         {activeSection === "screens" ? (
           <section className="section-grid">
-            <Panel title="Add New Device" subtitle="Wpisz kod z TV, przypnij klienta i kanał">
-              <form className="form-grid" onSubmit={handlePairDevice}>
-                <TextField
-                  label="Kod z telewizora"
-                  value={pairingForm.pairingCode}
-                  onChange={(value) =>
-                    setPairingForm((current) => ({
-                      ...current,
-                      pairingCode: normalizePairingCode(value)
-                    }))
-                  }
-                  placeholder="A7K4P2Q9"
+            <Panel title="Zatwierdź urządzenie oczekujące" subtitle="Wybierz ekran z kolejki i przypnij go do klienta oraz kanału">
+              <form className="form-grid" onSubmit={handleApproveWaitingDevice}>
+                <SelectField
+                  label="Urządzenie oczekujące"
+                  value={approvalForm.pairingId}
+                  onChange={(value) => {
+                    const pairing = waitingPairingRecords.find((entry) => entry.id === value) ?? null;
+                    setApprovalForm(pairing ? toApprovalForm(pairing, authRecord) : defaultApprovalForm);
+                  }}
+                  options={waitingPairingRecords.map((pairing) => ({
+                    value: pairing.id,
+                    label: `${pairing.deviceName} • ID ${pairing.pairingCode}`
+                  }))}
                   required
                 />
                 <TextField
                   label="Nazwa urządzenia"
-                  value={pairingForm.name}
-                  onChange={(value) => setPairingForm((current) => ({ ...current, name: value }))}
+                  value={approvalForm.name}
+                  onChange={(value) => setApprovalForm((current) => ({ ...current, name: value }))}
                   placeholder="Android TV Lobby"
+                  required
                 />
                 <SelectField
                   label="Klient"
-                  value={pairingForm.client}
-                  onChange={(value) => setPairingForm((current) => ({ ...current, client: value }))}
+                  value={approvalForm.client}
+                  onChange={(value) => setApprovalForm((current) => ({ ...current, client: value }))}
                   options={dashboard.clients.map((client) => ({
                     value: client.id,
                     label: client.name
@@ -1449,11 +1490,11 @@ function App() {
                 />
                 <SelectField
                   label="Kanał"
-                  value={pairingForm.channel}
-                  onChange={(value) => setPairingForm((current) => ({ ...current, channel: value }))}
+                  value={approvalForm.channel}
+                  onChange={(value) => setApprovalForm((current) => ({ ...current, channel: value }))}
                   options={dashboard.channels
                     .filter((channel) => {
-                      const clientId = pairingForm.client || authRecord?.client;
+                      const clientId = approvalForm.client || authRecord?.client;
                       return !clientId || channel.client === clientId;
                     })
                     .map((channel) => ({
@@ -1464,51 +1505,68 @@ function App() {
                 />
                 <TextField
                   label="Lokalizacja"
-                  value={pairingForm.locationLabel}
+                  value={approvalForm.locationLabel}
                   onChange={(value) =>
-                    setPairingForm((current) => ({ ...current, locationLabel: value }))
+                    setApprovalForm((current) => ({ ...current, locationLabel: value }))
                   }
                   placeholder="Warszawa / recepcja"
+                  required
                 />
                 <TextField
                   label="Głośność %"
-                  value={pairingForm.volumePercent}
+                  value={approvalForm.volumePercent}
                   onChange={(value) =>
-                    setPairingForm((current) => ({ ...current, volumePercent: value }))
+                    setApprovalForm((current) => ({ ...current, volumePercent: value }))
                   }
                   type="number"
                   required
                 />
                 <TextAreaField
                   label="Notatki do urządzenia"
-                  value={pairingForm.notes}
-                  onChange={(value) => setPairingForm((current) => ({ ...current, notes: value }))}
+                  value={approvalForm.notes}
+                  onChange={(value) => setApprovalForm((current) => ({ ...current, notes: value }))}
                   placeholder="Samsung Android TV, zasilanie z UPS, kiosk mode."
                 />
                 <button className="primary-button" type="submit">
-                  Sparuj urządzenie
+                  Zatwierdź urządzenie
                 </button>
               </form>
             </Panel>
 
-            <Panel title="Kod oczekujące" subtitle="Świeże instalacje, które wyświetlają kod na TV">
+            <Panel title="Urządzenia oczekujące" subtitle="Nowe instalacje playera, które czekają na akceptację z CMS">
               <div className="list-stack">
-                {dashboard.devicePairings
-                  .filter((pairing) => pairing.status === "waiting")
-                  .map((pairing) => (
+                {waitingPairingRecords.map((pairing) => (
                     <RecordRow
                       key={pairing.id}
                       title={pairing.deviceName}
                       subtitle={`${pairing.platform || "platforma?"} • ${pairing.appVersion || "brak wersji"}`}
-                      meta={`kod ${pairing.pairingCode} • ostatni heartbeat ${formatHeartbeat(pairing.lastSeenAt) || "brak"}`}
+                      meta={`ID ${pairing.pairingCode} • installer ${shortInstallerId(pairing.installerId)} • ostatni heartbeat ${formatHeartbeat(pairing.lastSeenAt) || "brak"}`}
                       badge={<span className="soft-badge">waiting</span>}
+                      action={
+                        <div className="device-command-row">
+                          <button
+                            className="ghost-button"
+                            onClick={() => setApprovalForm(toApprovalForm(pairing, authRecord))}
+                            type="button"
+                          >
+                            Zatwierdź
+                          </button>
+                          <button
+                            className="danger-button"
+                            onClick={() => handleDelete("device_pairings", pairing.id, pairing.deviceName)}
+                            type="button"
+                          >
+                            Usuń z kolejki
+                          </button>
+                        </div>
+                      }
                     />
                   ))}
-                {!waitingPairings ? <EmptyState text="Brak kodów czekających na przypięcie." /> : null}
+                {!waitingPairings ? <EmptyState text="Brak urządzeń czekających na zatwierdzenie." /> : null}
               </div>
             </Panel>
 
-            <Panel title="Profil urządzenia" subtitle="Zdalny blackout, sieć i parametry wybranego ekranu">
+            <Panel title="Profil urządzenia" subtitle="Przypisanie klienta i kanału, sieć oraz zdalne akcje dla wybranego ekranu">
               {selectedScreen ? (
                 <form className="form-grid" onSubmit={handleUpdateDeviceProfile}>
                   <SelectField
@@ -1519,6 +1577,48 @@ function App() {
                       value: screen.id,
                       label: `${screen.locationLabel || screen.name} • ${screen.expand?.channel?.name || "bez kanału"}`
                     }))}
+                    required
+                  />
+                  <TextField
+                    label="Nazwa urządzenia"
+                    value={deviceProfileForm.name}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, name: value }))
+                    }
+                    required
+                  />
+                  <SelectField
+                    label="Klient"
+                    value={deviceProfileForm.client}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, client: value }))
+                    }
+                    options={dashboard.clients.map((client) => ({
+                      value: client.id,
+                      label: client.name
+                    }))}
+                    required
+                  />
+                  <SelectField
+                    label="Kanał"
+                    value={deviceProfileForm.channel}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, channel: value }))
+                    }
+                    options={dashboard.channels
+                      .filter((channel) => !deviceProfileForm.client || channel.client === deviceProfileForm.client)
+                      .map((channel) => ({
+                        value: channel.id,
+                        label: channel.name
+                      }))}
+                    required
+                  />
+                  <TextField
+                    label="Lokalizacja"
+                    value={deviceProfileForm.locationLabel}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, locationLabel: value }))
+                    }
                     required
                   />
                   <TextField
@@ -1625,12 +1725,19 @@ function App() {
                     </button>
                     <button
                       className="ghost-button"
-                      onClick={() => void handleQueueCommand(selectedScreen, "restart_app")}
-                      type="button"
-                    >
-                      Restart appki
-                    </button>
+                    onClick={() => void handleQueueCommand(selectedScreen, "restart_app")}
+                    type="button"
+                  >
+                    Restart appki
+                  </button>
                   </div>
+                  {selectedProvisioning ? (
+                    <div className="device-meta">
+                      <span>ID urządzenia: {selectedProvisioning.pairingCode}</span>
+                      <span>Installer: {shortInstallerId(selectedProvisioning.installerId)}</span>
+                      <span>Konto: {selectedScreen.email}</span>
+                    </div>
+                  ) : null}
                 </form>
               ) : (
                 <EmptyState text="Nie masz jeszcze żadnego urządzenia do edycji." />
@@ -1670,6 +1777,9 @@ function App() {
 
                       <div className="device-meta">
                         <span>{screen.email}</span>
+                        <span>
+                          ID: {dashboard.devicePairings.find((entry) => entry.screen === screen.id)?.pairingCode || "brak"}
+                        </span>
                         <span>IP: {screen.lastIpAddress || "brak"}</span>
                         <span>
                           screenshot {screen.lastScreenshotAt ? formatHeartbeat(screen.lastScreenshotAt) : "brak"}
@@ -2353,20 +2463,21 @@ function App() {
 
                 <article className="mini-card install-card">
                   <span className="eyebrow">krok 2</span>
-                  <h3>Player pokaże kod</h3>
+                  <h3>Player pokaże identyfikator</h3>
                   <p>
-                    Po pierwszym uruchomieniu apka wyświetli duży kod parowania. Wpisujesz go potem
-                    w sekcji <strong>Add New Device</strong>.
+                    Po pierwszym uruchomieniu apka sama zgłosi się do CMS jako urządzenie oczekujące.
+                    Na ekranie TV zobaczysz jego stały identyfikator instalacji.
                   </p>
-                  <p>Ten kod jest teraz stały dla konkretnej instalacji aplikacji, jak lekki numer seryjny.</p>
+                  <p>Ten identyfikator jest stały dla konkretnej instalacji aplikacji, jak lekki numer seryjny.</p>
                 </article>
 
                 <article className="mini-card install-card">
                   <span className="eyebrow">krok 3</span>
-                  <h3>CMS przypina urządzenie</h3>
+                  <h3>CMS zatwierdza urządzenie</h3>
                   <p>
-                    Po sparowaniu TV samo zaloguje się do <code>screen_users</code> i zacznie
-                    raportować status, screenshoty i heartbeat.
+                    W sekcji <strong>Urządzenia</strong> wybierz ekran z kolejki, nadaj mu nazwę,
+                    przypisz klienta i kanał. Po zatwierdzeniu TV samo zaloguje się do
+                    <code>screen_users</code> i zacznie raportować status, screenshoty i heartbeat.
                   </p>
                 </article>
               </div>
@@ -2758,6 +2869,10 @@ function PriorityBadge({ value }: { value: number }) {
 function toDeviceProfileForm(screen: ScreenUserRecord) {
   return {
     screen: screen.id,
+    name: screen.name || "",
+    client: screen.client || "",
+    channel: screen.channel || "",
+    locationLabel: screen.locationLabel || "",
     volumePercent: String(screen.volumePercent || 80),
     desiredDisplayState: screen.desiredDisplayState || "active",
     networkMode: screen.networkMode || "dhcp",
@@ -2767,6 +2882,18 @@ function toDeviceProfileForm(screen: ScreenUserRecord) {
     wifiSsid: screen.wifiSsid || "",
     networkNotes: screen.networkNotes || "",
     notes: screen.notes || ""
+  };
+}
+
+function toApprovalForm(pairing: DevicePairingRecord, authRecord: CmsUserRecord | null) {
+  return {
+    pairingId: pairing.id,
+    name: pairing.deviceName || "",
+    client: pairing.client || authRecord?.client || "",
+    channel: pairing.channel || "",
+    locationLabel: pairing.locationLabel || "",
+    volumePercent: "80",
+    notes: ""
   };
 }
 
@@ -2895,16 +3022,13 @@ function formatHeartbeat(value: string) {
   );
 }
 
-function buildPairingEmail(deviceName: string, pairingCode: string) {
+function buildScreenEmailFromInstallerId(deviceName: string, installerId: string) {
   const base = slugify(deviceName) || "android-tv";
-  return `screen-${base}-${pairingCode.toLowerCase()}@pair.signaldeck.local`;
+  return `screen-${base}-${installerId.replace(/[^a-z0-9]/gi, "").slice(0, 24).toLowerCase()}@screen.signaldeck.local`;
 }
 
-function normalizePairingCode(value: string) {
-  return value
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "")
-    .slice(0, 12);
+function shortInstallerId(value: string) {
+  return value ? value.slice(0, 8) : "brak";
 }
 
 function translateCommand(commandType: DeviceCommandRecord["commandType"]) {
@@ -2991,23 +3115,6 @@ async function safeGetFullList<T>(
   } catch (error) {
     logCmsError(`getFullList:${collectionName}`, error);
     return [] as T[];
-  }
-}
-
-async function findWaitingPairingByCode(pairingCode: string) {
-  if (!pairingCode) {
-    return null;
-  }
-
-  try {
-    return await pb
-      .collection("device_pairings")
-      .getFirstListItem<DevicePairingRecord>(
-        `pairingCode="${escapeFilterValue(pairingCode)}" && status="waiting"`
-      );
-  } catch (error) {
-    logCmsError(`findWaitingPairingByCode:${pairingCode}`, error);
-    return null;
   }
 }
 

@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.2.0";
+const appVersion = "0.3.0";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -117,7 +117,7 @@ function App() {
           setShowConfig(false);
         }
       } catch {
-        if (pairingSession?.recordId && pairingSession.pairingCode?.length >= 8) {
+        if (pairingSession?.recordId && pairingSession.installerId) {
           try {
             const pairing = await refreshPairingRecord(client, pairingSession);
             if (cancelled) {
@@ -224,7 +224,7 @@ function App() {
               setIsConnected(false);
               showFlash(setFlash, {
                 kind: "error",
-                text: readError(error, "Nie udało się odświeżyć kodu parowania.")
+                text: readError(error, "Nie udało się odświeżyć zgłoszenia urządzenia.")
               });
             }
           }
@@ -239,7 +239,7 @@ function App() {
           setIsConnected(false);
           showFlash(setFlash, {
             kind: "error",
-            text: readError(error, "Nie udało się uruchomić trybu parowania.")
+            text: readError(error, "Nie udało się uruchomić trybu rejestracji urządzenia.")
           });
         }
       }
@@ -517,8 +517,6 @@ function App() {
           draftSettings.password
         );
 
-        clearPairingSession();
-        setPairingSession(null);
         setPairingRecord(null);
         saveSettings(draftSettings);
         setSettings(draftSettings);
@@ -547,9 +545,6 @@ function App() {
     };
 
     nextClient.authStore.clear();
-    clearPairingSession();
-    setPairingSession(null);
-    setPairingRecord(null);
     saveSettings(nextSettings);
     setSettings(nextSettings);
     setDraftSettings(nextSettings);
@@ -557,13 +552,33 @@ function App() {
     setShowConfig(false);
     showFlash(setFlash, {
       kind: "success",
-      text: "Adres PocketBase zapisany. Player wygeneruje nowy kod parowania."
+      text: "Adres PocketBase zapisany. Urządzenie zgłosi się do CMS jako oczekujące."
     });
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    if (pairingSession?.recordId) {
+      try {
+        const refreshed = await client.collection("device_pairings").update<DevicePairingRecord>(
+          pairingSession.recordId,
+          {
+            status: "waiting",
+            screen: "",
+            assignedEmail: "",
+            claimedAt: "",
+            lastSeenAt: new Date().toISOString(),
+            deviceName: getDeviceDescriptor(),
+            platform: Capacitor.getPlatform(),
+            appVersion
+          }
+        );
+        setPairingRecord(refreshed);
+      } catch {
+        setPairingRecord(null);
+      }
+    }
+
     client.authStore.clear();
-    clearPairingSession();
     const resetSettings = {
       pocketbaseUrl: settings.pocketbaseUrl,
       email: "",
@@ -573,31 +588,33 @@ function App() {
     saveSettings(resetSettings);
     setSettings(resetSettings);
     setDraftSettings(resetSettings);
-    setPairingSession(null);
-    setPairingRecord(null);
     setSyncState(emptySyncState);
     setPlaybackUnlocked(false);
     setDisplayMode("active");
     setIsConnected(false);
-    setShowConfig(true);
-  }
-
-  async function regeneratePairingCode() {
-    clearPairingSession();
-    setPairingSession(null);
-    setPairingRecord(null);
-    setSettings((current) => ({ ...current, email: "", password: "" }));
-    setDraftSettings((current) => ({ ...current, email: "", password: "" }));
-    saveSettings({
-      pocketbaseUrl: settings.pocketbaseUrl,
-      email: "",
-      password: ""
-    });
-    client.authStore.clear();
+    setShowConfig(false);
     showFlash(setFlash, {
       kind: "success",
-      text: "Stary kod został porzucony. Generuję nowy kod parowania."
+      text: "Urządzenie zostało rozłączone i wróciło do kolejki oczekujących w CMS."
     });
+  }
+
+  async function refreshDeviceRegistration() {
+    try {
+      const ensured = await ensurePairingSession(client, pairingSession);
+      setPairingSession(ensured.session);
+      setPairingRecord(ensured.record);
+      savePairingSession(ensured.session);
+      showFlash(setFlash, {
+        kind: "success",
+        text: "Zgłoszenie urządzenia zostało odświeżone w CMS."
+      });
+    } catch (error) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: readError(error, "Nie udało się odświeżyć zgłoszenia urządzenia.")
+      });
+    }
   }
 
   async function unlockPlayback() {
@@ -656,11 +673,11 @@ function App() {
             {syncState.screen?.locationLabel ||
               syncState.screen?.name ||
               pairingRecord?.deviceName ||
-              "niepołączony ekran"}
+              getDeviceDescriptor()}
           </strong>
           <small>
             {syncState.screen?.expand?.client?.name ||
-              (pairingRecord ? `kod ${pairingRecord.pairingCode}` : "Uruchom pairing")}{" "}
+              (pairingRecord ? `ID ${pairingRecord.pairingCode}` : "Urządzenie oczekujące")}{" "}
             • {syncState.screen?.expand?.channel?.name || Capacitor.getPlatform()}
           </small>
         </div>
@@ -669,7 +686,7 @@ function App() {
           <button className="ghost-button" onClick={() => setShowConfig((value) => !value)} type="button">
             {showConfig ? "Ukryj panel" : "Konfiguracja"}
           </button>
-          <button className="ghost-button danger" onClick={handleLogout} type="button">
+          <button className="ghost-button danger" onClick={() => void handleLogout()} type="button">
             Reset / rozłącz
           </button>
         </div>
@@ -693,7 +710,7 @@ function App() {
               : syncState.activeSchedule
                 ? `Schedule: ${syncState.activeSchedule.label}`
                 : pairingRecord
-                  ? "Czeka na sparowanie z CMS"
+                  ? "Czeka na zatwierdzenie w CMS"
                   : "Standby"}
           </span>
           <small>
@@ -705,20 +722,26 @@ function App() {
       {!client.authStore.isValid ? (
         <div className="pairing-overlay">
           <div className="pairing-card">
-            <span className="eyebrow">android tv onboarding</span>
+            <span className="eyebrow">android tv waiting room</span>
             <h2>{pairingRecord?.pairingCode || "..."}</h2>
             <p>
-              W CMS przejdź do sekcji <strong>Add New Device</strong> i wpisz ten kod. Po przypięciu
-              klienta i kanału player zaloguje się sam.
+              To stały identyfikator tej instalacji. W CMS przejdź do sekcji
+              <strong> Urządzenia</strong>, wybierz to zgłoszenie z kolejki i kliknij
+              <strong> Zatwierdź</strong>. Po przypisaniu klienta i kanału player zaloguje się sam.
             </p>
+            <div className="pairing-meta">
+              <span>ID urządzenia</span>
+              <strong>{pairingRecord?.pairingCode || "..."}</strong>
+              <small>{pairingRecord?.deviceName || getDeviceDescriptor()}</small>
+            </div>
             <div className="pairing-meta">
               <span>APK</span>
               <strong>{appVersion}</strong>
-              <small>{pairingRecord?.deviceName || getDeviceDescriptor()}</small>
+              <small>{Capacitor.getPlatform()}</small>
             </div>
             <div className="pairing-actions">
-              <button className="ghost-button" onClick={() => void regeneratePairingCode()} type="button">
-                Wygeneruj nowy kod
+              <button className="ghost-button" onClick={() => void refreshDeviceRegistration()} type="button">
+                Odśwież zgłoszenie
               </button>
               <button className="ghost-button" onClick={() => setShowConfig(true)} type="button">
                 PocketBase URL
@@ -760,8 +783,9 @@ function App() {
             <span className="eyebrow">setup</span>
             <h2>Konfiguracja playera</h2>
             <p>
-              Wpisz tylko adres PocketBase, a player sam pokaże kod parowania. Pola email/hasło są
-              opcjonalne i służą głównie do ręcznego trybu serwisowego.
+              Wpisz tylko adres PocketBase, a player sam zgłosi się do CMS jako urządzenie
+              oczekujące. Pola email/hasło są opcjonalne i służą głównie do ręcznego trybu
+              serwisowego.
             </p>
 
             <label className="field">
@@ -818,7 +842,7 @@ function App() {
 
             <div className="config-info">
               <span>Aktualnie zapisane</span>
-              <strong>{settings.email || pairingRecord?.pairingCode || "tryb parowania"}</strong>
+              <strong>{settings.email || (pairingRecord ? `ID ${pairingRecord.pairingCode}` : "urządzenie oczekujące")}</strong>
               <small>{settings.pocketbaseUrl || defaultPocketBaseUrl}</small>
             </div>
 
@@ -961,24 +985,22 @@ async function ensurePairingSession(
   client: ReturnType<typeof createPocketBaseClient>,
   existing: PairingSession | null
 ): Promise<{ session: PairingSession; record: DevicePairingRecord }> {
-  if (existing?.recordId && existing.pairingCode?.length >= 8) {
+  if (existing?.recordId && existing.installerId) {
     try {
       const record = await refreshPairingRecord(client, existing);
-      if (record.status !== "expired") {
-        return {
-          session: {
-            ...existing,
-            pairingCode: record.pairingCode || existing.pairingCode
-          },
-          record
-        };
-      }
+      return {
+        session: {
+          ...existing,
+          pairingCode: record.pairingCode || existing.pairingCode
+        },
+        record
+      };
     } catch {
       // Try to recover the record by the stable installer id before creating a new one.
     }
   }
 
-  if (existing?.installerId && existing.pairingCode?.length >= 8) {
+  if (existing?.installerId) {
     try {
       const record = await client
         .collection("device_pairings")
@@ -986,23 +1008,22 @@ async function ensurePairingSession(
           `installerId="${escapeFilterValue(existing.installerId)}"`
         );
 
-      if (record.status !== "expired") {
-        await client.collection("device_pairings").update(record.id, {
-          lastSeenAt: new Date().toISOString(),
-          deviceName: getDeviceDescriptor(),
-          platform: Capacitor.getPlatform(),
-          appVersion
-        });
+      const refreshed = await client.collection("device_pairings").update<DevicePairingRecord>(record.id, {
+        status: record.status === "expired" ? "waiting" : record.status,
+        lastSeenAt: new Date().toISOString(),
+        deviceName: getDeviceDescriptor(),
+        platform: Capacitor.getPlatform(),
+        appVersion
+      });
 
-        return {
-          session: {
-            ...existing,
-            recordId: record.id,
-            pairingCode: record.pairingCode || existing.pairingCode
-          },
-          record
-        };
-      }
+      return {
+        session: {
+          ...existing,
+          recordId: refreshed.id,
+          pairingCode: refreshed.pairingCode || existing.pairingCode
+        },
+        record: refreshed
+      };
     } catch {
       // ignore and create a new session
     }
@@ -1068,14 +1089,27 @@ async function completePairingLogin(params: {
   setPlaybackUnlocked: (value: boolean) => void;
   setCurrentIndex: (value: number) => void;
 }) {
-  await params.client
-    .collection("screen_users")
-    .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
+  let resolvedPassword = params.session.installerId;
+
+  try {
+    await params.client
+      .collection("screen_users")
+      .authWithPassword(params.record.assignedEmail, params.session.installerId);
+  } catch (primaryError) {
+    try {
+      await params.client
+        .collection("screen_users")
+        .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
+      resolvedPassword = params.session.pairingCode;
+    } catch {
+      throw primaryError;
+    }
+  }
 
   const nextSettings = {
     pocketbaseUrl: params.settings.pocketbaseUrl,
     email: params.record.assignedEmail,
-    password: params.session.pairingCode
+    password: resolvedPassword
   };
 
   await params.client.collection("device_pairings").update(params.record.id, {
@@ -1339,10 +1373,6 @@ function loadPairingSession() {
 
 function savePairingSession(session: PairingSession) {
   window.localStorage.setItem(pairingStorageKey, JSON.stringify(session));
-}
-
-function clearPairingSession() {
-  window.localStorage.removeItem(pairingStorageKey);
 }
 
 function showFlash(
