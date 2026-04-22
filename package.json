@@ -1,0 +1,16 @@
+{
+  "name": "digital-signage",
+  "private": true,
+  "workspaces": [
+    "apps/cms",
+    "apps/player"
+  ],
+  "scripts": {
+    "dev:cms": "npm run dev --workspace @ds/cms",
+    "build:cms": "npm run build --workspace @ds/cms",
+    "dev:player": "npm run dev --workspace @ds/player",
+    "build:player": "npm run build --workspace @ds/player",
+    "build": "npm run build:cms && npm run build:player",
+    "pocketbase:setup": "node scripts/setup-pocketbase.mjs"
+  }
+}
