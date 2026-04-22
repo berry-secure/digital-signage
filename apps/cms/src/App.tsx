@@ -213,6 +213,7 @@ function App() {
 
     let cancelled = false;
     let timer = 0;
+    let poller = 0;
 
     const load = async () => {
       setIsLoading(true);
@@ -312,6 +313,9 @@ function App() {
     };
 
     void load();
+    poller = window.setInterval(() => {
+      void load();
+    }, 15000);
 
     const subscribe = async () => {
       const results = await Promise.allSettled(
@@ -337,6 +341,7 @@ function App() {
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      window.clearInterval(poller);
       collectionNames.forEach((name) => {
         pb.collection(name).unsubscribe("*");
       });
@@ -576,9 +581,11 @@ function App() {
     event.preventDefault();
 
     const pairingCode = normalizePairingCode(pairingForm.pairingCode);
-    const pairing = dashboard.devicePairings.find(
-      (entry) => normalizePairingCode(entry.pairingCode) === pairingCode && entry.status === "waiting"
-    );
+    const pairing =
+      (await findWaitingPairingByCode(pairingCode)) ||
+      dashboard.devicePairings.find(
+        (entry) => normalizePairingCode(entry.pairingCode) === pairingCode && entry.status === "waiting"
+      );
 
     if (!pairing) {
       showFlash(setFlash, {
@@ -2683,9 +2690,31 @@ async function safeGetFullList<T>(
   }
 }
 
+async function findWaitingPairingByCode(pairingCode: string) {
+  if (!pairingCode) {
+    return null;
+  }
+
+  try {
+    return await pb.collection("device_pairings").getFirstListItem<DevicePairingRecord>(
+      `pairingCode="${escapeFilterValue(pairingCode)}" && status="waiting"`,
+      {
+        expand: "client,channel,screen"
+      }
+    );
+  } catch (error) {
+    logCmsError(`findWaitingPairingByCode:${pairingCode}`, error);
+    return null;
+  }
+}
+
 function logCmsError(context: string, error: unknown) {
   console.error(`[Signal Deck CMS] ${context}`);
   console.error(error);
+}
+
+function escapeFilterValue(value: string) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 function readError(error: unknown, fallback: string) {
