@@ -232,45 +232,45 @@ function App() {
           schedules,
           events
         ] = await Promise.all([
-          pb.files.getToken(),
-          pb.collection("clients").getFullList<ClientRecord>({ sort: "name" }),
-          pb.collection("channels").getFullList<ChannelRecord>({
+          safeGetFileToken(),
+          safeGetFullList<ClientRecord>("clients", { sort: "name" }),
+          safeGetFullList<ChannelRecord>("channels", {
             sort: "name",
             expand: "client"
           }),
-          pb.collection("cms_users").getFullList<CmsUserRecord>({
+          safeGetFullList<CmsUserRecord>("cms_users", {
             sort: "name",
             expand: "client"
           }),
-          pb.collection("screen_users").getFullList<ScreenUserRecord>({
+          safeGetFullList<ScreenUserRecord>("screen_users", {
             sort: "-lastSeenAt,locationLabel",
             expand: "client,channel"
           }),
-          pb.collection("device_pairings").getFullList<DevicePairingRecord>({
+          safeGetFullList<DevicePairingRecord>("device_pairings", {
             sort: "-created",
             expand: "client,channel,screen"
           }),
-          pb.collection("device_commands").getFullList<DeviceCommandRecord>({
+          safeGetFullList<DeviceCommandRecord>("device_commands", {
             sort: "-created",
             expand: "screen,issuedBy"
           }),
-          pb.collection("media_assets").getFullList<MediaAssetRecord>({
+          safeGetFullList<MediaAssetRecord>("media_assets", {
             sort: "-created",
             expand: "client"
           }),
-          pb.collection("playlists").getFullList<PlaylistRecord>({
+          safeGetFullList<PlaylistRecord>("playlists", {
             sort: "name",
             expand: "client,channel"
           }),
-          pb.collection("playlist_items").getFullList<PlaylistItemRecord>({
+          safeGetFullList<PlaylistItemRecord>("playlist_items", {
             sort: "playlist,sortOrder",
             expand: "playlist,mediaAsset"
           }),
-          pb.collection("schedule_rules").getFullList<ScheduleRuleRecord>({
+          safeGetFullList<ScheduleRuleRecord>("schedule_rules", {
             sort: "-priority,label",
             expand: "client,channel,playlist"
           }),
-          pb.collection("events").getFullList<EventRecord>({
+          safeGetFullList<EventRecord>("events", {
             sort: "-priority,-startsAt",
             expand: "client,channel,screen,playlist"
           })
@@ -314,7 +314,7 @@ function App() {
     void load();
 
     const subscribe = async () => {
-      await Promise.all(
+      const results = await Promise.allSettled(
         collectionNames.map((name) =>
           pb.collection(name).subscribe("*", () => {
             window.clearTimeout(timer);
@@ -324,6 +324,12 @@ function App() {
           })
         )
       );
+
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          logCmsError(`subscribe:${collectionNames[index]}`, result.reason);
+        }
+      });
     };
 
     void subscribe();
@@ -2656,7 +2662,57 @@ async function readVideoDuration(file: File) {
   });
 }
 
+async function safeGetFileToken() {
+  try {
+    return await pb.files.getToken();
+  } catch (error) {
+    logCmsError("files.getToken", error);
+    return "";
+  }
+}
+
+async function safeGetFullList<T>(
+  collectionName: string,
+  options?: Parameters<typeof pb.collection>[0] extends never ? never : Record<string, unknown>
+) {
+  try {
+    return await pb.collection(collectionName).getFullList<T>(options);
+  } catch (error) {
+    logCmsError(`getFullList:${collectionName}`, error);
+    return [] as T[];
+  }
+}
+
+function logCmsError(context: string, error: unknown) {
+  console.error(`[Signal Deck CMS] ${context}`);
+  console.error(error);
+}
+
 function readError(error: unknown, fallback: string) {
+  const responseMessage =
+    typeof error === "object" && error !== null && "response" in error
+      ? (error as { response?: { message?: string } }).response?.message
+      : "";
+
+  const responseData =
+    typeof error === "object" && error !== null && "response" in error
+      ? (error as { response?: { data?: Record<string, { message?: string }> } }).response?.data
+      : undefined;
+
+  if (responseData && typeof responseData === "object") {
+    const firstFieldError = Object.values(responseData)
+      .map((entry) => entry?.message)
+      .find((message) => typeof message === "string" && message.trim());
+
+    if (firstFieldError) {
+      return firstFieldError;
+    }
+  }
+
+  if (typeof responseMessage === "string" && responseMessage.trim()) {
+    return responseMessage;
+  }
+
   if (error instanceof Error && error.message) {
     return error.message;
   }
