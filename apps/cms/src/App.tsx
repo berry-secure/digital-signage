@@ -236,44 +236,34 @@ function App() {
           safeGetFileToken(),
           safeGetFullList<ClientRecord>("clients", { sort: "name" }),
           safeGetFullList<ChannelRecord>("channels", {
-            sort: "name",
-            expand: "client"
+            sort: "name"
           }),
           safeGetFullList<CmsUserRecord>("cms_users", {
-            sort: "name",
-            expand: "client"
+            sort: "name"
           }),
           safeGetFullList<ScreenUserRecord>("screen_users", {
-            sort: "-lastSeenAt,locationLabel",
-            expand: "client,channel"
+            sort: "-lastSeenAt,locationLabel"
           }),
           safeGetFullList<DevicePairingRecord>("device_pairings", {
-            sort: "-created",
-            expand: "client,channel,screen"
+            sort: "-created"
           }),
           safeGetFullList<DeviceCommandRecord>("device_commands", {
-            sort: "-created",
-            expand: "screen,issuedBy"
+            sort: "-created"
           }),
           safeGetFullList<MediaAssetRecord>("media_assets", {
-            sort: "-created",
-            expand: "client"
+            sort: "-created"
           }),
           safeGetFullList<PlaylistRecord>("playlists", {
-            sort: "name",
-            expand: "client,channel"
+            sort: "name"
           }),
           safeGetFullList<PlaylistItemRecord>("playlist_items", {
-            sort: "playlist,sortOrder",
-            expand: "playlist,mediaAsset"
+            sort: "playlist,sortOrder"
           }),
           safeGetFullList<ScheduleRuleRecord>("schedule_rules", {
-            sort: "-priority,label",
-            expand: "client,channel,playlist"
+            sort: "-priority,label"
           }),
           safeGetFullList<EventRecord>("events", {
-            sort: "-priority,-startsAt",
-            expand: "client,channel,screen,playlist"
+            sort: "-priority,-startsAt"
           })
         ]);
 
@@ -283,21 +273,23 @@ function App() {
 
         setFileToken(token);
         setDashboard(
-          scopeDashboard(
-            {
-              clients,
-              channels,
-              cmsUsers,
-              screens,
-              devicePairings,
-              deviceCommands,
-              mediaAssets,
-              playlists,
-              playlistItems,
-              schedules,
-              events
-            },
-            authRecord
+          hydrateDashboardRelations(
+            scopeDashboard(
+              {
+                clients,
+                channels,
+                cmsUsers,
+                screens,
+                devicePairings,
+                deviceCommands,
+                mediaAssets,
+                playlists,
+                playlistItems,
+                schedules,
+                events
+              },
+              authRecord
+            )
           )
         );
       } catch (error) {
@@ -2350,6 +2342,123 @@ function scopeDashboard(data: DashboardData, authRecord: CmsUserRecord | null): 
   };
 }
 
+function hydrateDashboardRelations(data: DashboardData): DashboardData {
+  const clients = data.clients.map((client) => ({
+    ...client
+  }));
+  const clientsById = new Map(clients.map((client) => [client.id, client]));
+
+  const channels = data.channels.map((channel) => ({
+    ...channel,
+    expand: {
+      ...channel.expand,
+      client: clientsById.get(channel.client)
+    }
+  }));
+  const channelsById = new Map(channels.map((channel) => [channel.id, channel]));
+
+  const cmsUsers = data.cmsUsers.map((user) => ({
+    ...user,
+    expand: {
+      ...user.expand,
+      client: clientsById.get(user.client)
+    }
+  }));
+  const cmsUsersById = new Map(cmsUsers.map((user) => [user.id, user]));
+
+  const screens = data.screens.map((screen) => ({
+    ...screen,
+    expand: {
+      ...screen.expand,
+      client: clientsById.get(screen.client),
+      channel: channelsById.get(screen.channel)
+    }
+  }));
+  const screensById = new Map(screens.map((screen) => [screen.id, screen]));
+
+  const devicePairings = data.devicePairings.map((pairing) => ({
+    ...pairing,
+    expand: {
+      ...pairing.expand,
+      client: clientsById.get(pairing.client),
+      channel: channelsById.get(pairing.channel),
+      screen: screensById.get(pairing.screen)
+    }
+  }));
+
+  const deviceCommands = data.deviceCommands.map((command) => ({
+    ...command,
+    expand: {
+      ...command.expand,
+      screen: screensById.get(command.screen),
+      issuedBy: cmsUsersById.get(command.issuedBy)
+    }
+  }));
+
+  const mediaAssets = data.mediaAssets.map((asset) => ({
+    ...asset,
+    expand: {
+      ...asset.expand,
+      client: clientsById.get(asset.client)
+    }
+  }));
+  const mediaAssetsById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
+
+  const playlists = data.playlists.map((playlist) => ({
+    ...playlist,
+    expand: {
+      ...playlist.expand,
+      client: clientsById.get(playlist.client),
+      channel: channelsById.get(playlist.channel)
+    }
+  }));
+  const playlistsById = new Map(playlists.map((playlist) => [playlist.id, playlist]));
+
+  const playlistItems = data.playlistItems.map((item) => ({
+    ...item,
+    expand: {
+      ...item.expand,
+      playlist: playlistsById.get(item.playlist),
+      mediaAsset: mediaAssetsById.get(item.mediaAsset)
+    }
+  }));
+
+  const schedules = data.schedules.map((schedule) => ({
+    ...schedule,
+    expand: {
+      ...schedule.expand,
+      client: clientsById.get(schedule.client),
+      channel: channelsById.get(schedule.channel),
+      playlist: playlistsById.get(schedule.playlist)
+    }
+  }));
+
+  const events = data.events.map((event) => ({
+    ...event,
+    expand: {
+      ...event.expand,
+      client: clientsById.get(event.client),
+      channel: channelsById.get(event.channel),
+      screen: screensById.get(event.screen),
+      playlist: playlistsById.get(event.playlist)
+    }
+  }));
+
+  return {
+    clients,
+    channels,
+    cmsUsers,
+    screens,
+    devicePairings,
+    deviceCommands,
+    mediaAssets,
+    playlists,
+    playlistItems,
+    schedules,
+    events
+  };
+}
+
 function FlashBanner({ flash }: { flash: FlashMessage }) {
   return <div className={flash.kind === "success" ? "flash success" : "flash error"}>{flash.text}</div>;
 }
@@ -2696,12 +2805,11 @@ async function findWaitingPairingByCode(pairingCode: string) {
   }
 
   try {
-    return await pb.collection("device_pairings").getFirstListItem<DevicePairingRecord>(
-      `pairingCode="${escapeFilterValue(pairingCode)}" && status="waiting"`,
-      {
-        expand: "client,channel,screen"
-      }
-    );
+    return await pb
+      .collection("device_pairings")
+      .getFirstListItem<DevicePairingRecord>(
+        `pairingCode="${escapeFilterValue(pairingCode)}" && status="waiting"`
+      );
   } catch (error) {
     logCmsError(`findWaitingPairingByCode:${pairingCode}`, error);
     return null;

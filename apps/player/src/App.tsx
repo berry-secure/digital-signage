@@ -919,7 +919,7 @@ async function ensurePairingSession(
   client: ReturnType<typeof createPocketBaseClient>,
   existing: PairingSession | null
 ): Promise<{ session: PairingSession; record: DevicePairingRecord }> {
-  if (existing?.recordId) {
+  if (existing?.recordId && existing.pairingCode?.length >= 8) {
     try {
       const record = await refreshPairingRecord(client, existing);
       if (record.status !== "claimed" && record.status !== "expired") {
@@ -1353,7 +1353,7 @@ function getDeviceDescriptor() {
 
 function generatePairingCode() {
   const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  return Array.from({ length: 8 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
 function generateSecret(length: number) {
