@@ -5,5 +5,8 @@ dist
 .env.local
 .env.production
 coverage
-apps/player/android
 apps/player/.capacitor
+apps/player/android/.gradle
+apps/player/android/local.properties
+apps/player/android/app/build
+apps/player/android/build

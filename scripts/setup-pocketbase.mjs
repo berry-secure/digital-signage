@@ -187,14 +187,100 @@ async function main() {
         type: "select",
         required: true,
         maxSelect: 1,
-        values: ["online", "offline", "maintenance"]
+        values: ["pairing", "online", "offline", "maintenance"]
       },
       { name: "volumePercent", type: "number", required: true, min: 0, max: 100, onlyInt: true },
       { name: "lastSeenAt", type: "date" },
       { name: "lastPlaybackAt", type: "date" },
-      { name: "notes", type: "text", max: 500 }
+      { name: "notes", type: "text", max: 500 },
+      {
+        name: "desiredDisplayState",
+        type: "select",
+        maxSelect: 1,
+        values: ["active", "blackout"]
+      },
+      { name: "deviceModel", type: "text", max: 180 },
+      { name: "appVersion", type: "text", max: 40 },
+      {
+        name: "lastScreenshot",
+        type: "file",
+        maxSelect: 1,
+        maxSize: 10485760,
+        protected: true,
+        mimeTypes: ["image/*"]
+      },
+      { name: "lastScreenshotAt", type: "date" },
+      { name: "lastIpAddress", type: "text", max: 80 },
+      {
+        name: "networkMode",
+        type: "select",
+        maxSelect: 1,
+        values: ["dhcp", "manual"]
+      },
+      { name: "networkAddress", type: "text", max: 80 },
+      { name: "networkGateway", type: "text", max: 80 },
+      { name: "networkDns", type: "text", max: 160 },
+      { name: "wifiSsid", type: "text", max: 120 },
+      { name: "networkNotes", type: "text", max: 500 }
     ],
     indexes: ["CREATE INDEX idx_screen_users_client_channel ON screen_users (client, channel)"]
+  }));
+
+  const devicePairingsCollection = await upsertCollection(collectionMap, "device_pairings", () => ({
+    name: "device_pairings",
+    type: "base",
+    listRule: "",
+    viewRule: "",
+    createRule: "",
+    updateRule: "",
+    deleteRule: cmsOnlyRule,
+    fields: [
+      { name: "installerId", type: "text", required: true, min: 8, max: 80 },
+      { name: "pairingCode", type: "text", required: true, min: 4, max: 12 },
+      {
+        name: "status",
+        type: "select",
+        required: true,
+        maxSelect: 1,
+        values: ["waiting", "paired", "claimed", "expired"]
+      },
+      { name: "deviceName", type: "text", required: true, min: 2, max: 180 },
+      { name: "platform", type: "text", max: 80 },
+      { name: "appVersion", type: "text", max: 40 },
+      { name: "pairingExpiresAt", type: "date" },
+      { name: "lastSeenAt", type: "date" },
+      {
+        name: "client",
+        type: "relation",
+        collectionId: clientsCollection.id,
+        minSelect: 0,
+        maxSelect: 1,
+        cascadeDelete: false
+      },
+      {
+        name: "channel",
+        type: "relation",
+        collectionId: channelsCollection.id,
+        minSelect: 0,
+        maxSelect: 1,
+        cascadeDelete: false
+      },
+      { name: "locationLabel", type: "text", max: 180 },
+      {
+        name: "screen",
+        type: "relation",
+        collectionId: screenUsersCollection.id,
+        minSelect: 0,
+        maxSelect: 1,
+        cascadeDelete: false
+      },
+      { name: "assignedEmail", type: "text", max: 180 },
+      { name: "claimedAt", type: "date" }
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX idx_device_pairings_installer_id ON device_pairings (installerId)",
+      "CREATE UNIQUE INDEX idx_device_pairings_pairing_code ON device_pairings (pairingCode)"
+    ]
   }));
 
   await upsertCollection(collectionMap, "media_assets", () => ({
@@ -423,6 +509,56 @@ async function main() {
     indexes: ["CREATE INDEX idx_events_client_priority ON events (client, priority)"]
   }));
 
+  await upsertCollection(collectionMap, "device_commands", () => ({
+    name: "device_commands",
+    type: "base",
+    listRule: cmsOrScreenRule,
+    viewRule: cmsOrScreenRule,
+    createRule: cmsOnlyRule,
+    updateRule: cmsOrScreenRule,
+    deleteRule: cmsOnlyRule,
+    fields: [
+      {
+        name: "screen",
+        type: "relation",
+        required: true,
+        collectionId: screenUsersCollection.id,
+        minSelect: 1,
+        maxSelect: 1,
+        cascadeDelete: true
+      },
+      {
+        name: "commandType",
+        type: "select",
+        required: true,
+        maxSelect: 1,
+        values: ["sync", "capture_screenshot", "blackout", "wake", "restart_app"]
+      },
+      { name: "payload", type: "text", max: 4000 },
+      {
+        name: "status",
+        type: "select",
+        required: true,
+        maxSelect: 1,
+        values: ["queued", "processing", "done", "failed"]
+      },
+      { name: "resultMessage", type: "text", max: 500 },
+      { name: "processedAt", type: "date" },
+      { name: "expiresAt", type: "date" },
+      {
+        name: "issuedBy",
+        type: "relation",
+        collectionId: cmsUsersCollection.id,
+        minSelect: 0,
+        maxSelect: 1,
+        cascadeDelete: false
+      }
+    ],
+    indexes: [
+      "CREATE INDEX idx_device_commands_screen_status ON device_commands (screen, status)"
+    ]
+  }));
+
   await upsertOwner(cmsUsersCollection.name, {
     email: args.ownerEmail,
     password: args.ownerPassword,
@@ -440,17 +576,28 @@ async function upsertCollection(collectionMap, name, buildPayload) {
   const payload = buildPayload();
   const existing = collectionMap.get(name);
 
-  if (existing) {
-    const updated = await pb.collections.update(existing.id, payload);
-    collectionMap.set(name, updated);
-    console.log(`Updated collection: ${name}`);
-    return updated;
-  }
+  try {
+    if (existing) {
+      const updated = await pb.collections.update(existing.id, payload);
+      collectionMap.set(name, updated);
+      console.log(`Updated collection: ${name}`);
+      return updated;
+    }
 
-  const created = await pb.collections.create(payload);
-  collectionMap.set(name, created);
-  console.log(`Created collection: ${name}`);
-  return created;
+    const created = await pb.collections.create(payload);
+    collectionMap.set(name, created);
+    console.log(`Created collection: ${name}`);
+    return created;
+  } catch (error) {
+    console.error(`Collection upsert failed for: ${name}`);
+    console.error("Payload:");
+    console.error(JSON.stringify(payload, null, 2));
+    if (error?.response) {
+      console.error("PocketBase response:");
+      console.error(JSON.stringify(error.response, null, 2));
+    }
+    throw error;
+  }
 }
 
 async function upsertOwner(collectionName, data) {

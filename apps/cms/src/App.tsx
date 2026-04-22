@@ -5,6 +5,8 @@ import type {
   ClientRecord,
   CmsUserRecord,
   DashboardData,
+  DeviceCommandRecord,
+  DevicePairingRecord,
   EventRecord,
   MediaAssetRecord,
   PlaylistItemRecord,
@@ -18,7 +20,10 @@ const pb = createPocketBaseClient();
 const collectionNames = [
   "clients",
   "channels",
+  "cms_users",
   "screen_users",
+  "device_pairings",
+  "device_commands",
   "media_assets",
   "playlists",
   "playlist_items",
@@ -30,11 +35,13 @@ type SectionKey =
   | "overview"
   | "clients"
   | "channels"
+  | "users"
   | "screens"
   | "media"
   | "playlists"
   | "schedule"
-  | "events";
+  | "events"
+  | "app";
 
 type FlashMessage = {
   kind: "success" | "error";
@@ -44,7 +51,10 @@ type FlashMessage = {
 const emptyDashboard: DashboardData = {
   clients: [],
   channels: [],
+  cmsUsers: [],
   screens: [],
+  devicePairings: [],
+  deviceCommands: [],
   mediaAssets: [],
   playlists: [],
   playlistItems: [],
@@ -56,11 +66,13 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "overview", label: "Overview", hint: "status i szybkie KPI" },
   { key: "clients", label: "Klienci", hint: "tenanci i branding" },
   { key: "channels", label: "Kanały", hint: "grupy ekranów" },
-  { key: "screens", label: "Ekrany", hint: "urządzenia i dostępy" },
+  { key: "users", label: "Użytkownicy", hint: "konta do CMS" },
+  { key: "screens", label: "Urządzenia", hint: "pairing, screenshoty, komendy" },
   { key: "media", label: "Media", hint: "wideo i assety" },
   { key: "playlists", label: "Playlisty", hint: "kolejność emisji" },
   { key: "schedule", label: "Scheduling", hint: "czas emisji" },
-  { key: "events", label: "Eventy", hint: "awaryjne override" }
+  { key: "events", label: "Eventy", hint: "awaryjne override" },
+  { key: "app", label: "Instalacja", hint: "APK i onboarding Android TV" }
 ];
 
 const defaultClientForm = {
@@ -77,14 +89,34 @@ const defaultChannelForm = {
   orientation: "landscape"
 };
 
-const defaultScreenForm = {
+const defaultCmsUserForm = {
+  email: "",
+  password: "",
+  name: "",
+  role: "manager",
+  client: ""
+};
+
+const defaultPairingForm = {
+  pairingCode: "",
   name: "",
   client: "",
   channel: "",
   locationLabel: "",
-  email: "",
-  password: "",
   volumePercent: "80",
+  notes: ""
+};
+
+const defaultDeviceProfileForm = {
+  screen: "",
+  volumePercent: "80",
+  desiredDisplayState: "active",
+  networkMode: "dhcp",
+  networkAddress: "",
+  networkGateway: "",
+  networkDns: "",
+  wifiSsid: "",
+  networkNotes: "",
   notes: ""
 };
 
@@ -150,10 +182,14 @@ function App() {
   const [flash, setFlash] = useState<FlashMessage | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
   const [fileToken, setFileToken] = useState<string>("");
+  const [apkAvailable, setApkAvailable] = useState<boolean | null>(null);
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [clientForm, setClientForm] = useState(defaultClientForm);
   const [channelForm, setChannelForm] = useState(defaultChannelForm);
-  const [screenForm, setScreenForm] = useState(defaultScreenForm);
+  const [cmsUserForm, setCmsUserForm] = useState(defaultCmsUserForm);
+  const [pairingForm, setPairingForm] = useState(defaultPairingForm);
+  const [selectedScreenId, setSelectedScreenId] = useState<string>("");
+  const [deviceProfileForm, setDeviceProfileForm] = useState(defaultDeviceProfileForm);
   const [mediaForm, setMediaForm] = useState(defaultMediaForm);
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [playlistForm, setPlaylistForm] = useState(defaultPlaylistForm);
@@ -182,39 +218,63 @@ function App() {
       setIsLoading(true);
 
       try {
-        const [token, clients, channels, screens, mediaAssets, playlists, playlistItems, schedules, events] =
-          await Promise.all([
-            pb.files.getToken(),
-            pb.collection("clients").getFullList<ClientRecord>({ sort: "name" }),
-            pb.collection("channels").getFullList<ChannelRecord>({
-              sort: "name",
-              expand: "client"
-            }),
-            pb.collection("screen_users").getFullList<ScreenUserRecord>({
-              sort: "locationLabel",
-              expand: "client,channel"
-            }),
-            pb.collection("media_assets").getFullList<MediaAssetRecord>({
-              sort: "-created",
-              expand: "client"
-            }),
-            pb.collection("playlists").getFullList<PlaylistRecord>({
-              sort: "name",
-              expand: "client,channel"
-            }),
-            pb.collection("playlist_items").getFullList<PlaylistItemRecord>({
-              sort: "playlist,sortOrder",
-              expand: "playlist,mediaAsset"
-            }),
-            pb.collection("schedule_rules").getFullList<ScheduleRuleRecord>({
-              sort: "-priority,label",
-              expand: "client,channel,playlist"
-            }),
-            pb.collection("events").getFullList<EventRecord>({
-              sort: "-priority,-startsAt",
-              expand: "client,channel,screen,playlist"
-            })
-          ]);
+        const [
+          token,
+          clients,
+          channels,
+          cmsUsers,
+          screens,
+          devicePairings,
+          deviceCommands,
+          mediaAssets,
+          playlists,
+          playlistItems,
+          schedules,
+          events
+        ] = await Promise.all([
+          pb.files.getToken(),
+          pb.collection("clients").getFullList<ClientRecord>({ sort: "name" }),
+          pb.collection("channels").getFullList<ChannelRecord>({
+            sort: "name",
+            expand: "client"
+          }),
+          pb.collection("cms_users").getFullList<CmsUserRecord>({
+            sort: "name",
+            expand: "client"
+          }),
+          pb.collection("screen_users").getFullList<ScreenUserRecord>({
+            sort: "-lastSeenAt,locationLabel",
+            expand: "client,channel"
+          }),
+          pb.collection("device_pairings").getFullList<DevicePairingRecord>({
+            sort: "-created",
+            expand: "client,channel,screen"
+          }),
+          pb.collection("device_commands").getFullList<DeviceCommandRecord>({
+            sort: "-created",
+            expand: "screen,issuedBy"
+          }),
+          pb.collection("media_assets").getFullList<MediaAssetRecord>({
+            sort: "-created",
+            expand: "client"
+          }),
+          pb.collection("playlists").getFullList<PlaylistRecord>({
+            sort: "name",
+            expand: "client,channel"
+          }),
+          pb.collection("playlist_items").getFullList<PlaylistItemRecord>({
+            sort: "playlist,sortOrder",
+            expand: "playlist,mediaAsset"
+          }),
+          pb.collection("schedule_rules").getFullList<ScheduleRuleRecord>({
+            sort: "-priority,label",
+            expand: "client,channel,playlist"
+          }),
+          pb.collection("events").getFullList<EventRecord>({
+            sort: "-priority,-startsAt",
+            expand: "client,channel,screen,playlist"
+          })
+        ]);
 
         if (cancelled) {
           return;
@@ -226,7 +286,10 @@ function App() {
             {
               clients,
               channels,
+              cmsUsers,
               screens,
+              devicePairings,
+              deviceCommands,
               mediaAssets,
               playlists,
               playlistItems,
@@ -274,6 +337,31 @@ function App() {
     };
   }, [authRecord?.id, authRecord?.client, authRecord?.role]);
 
+  useEffect(() => {
+    if (!dashboard.screens.length) {
+      setSelectedScreenId("");
+      setDeviceProfileForm(defaultDeviceProfileForm);
+      return;
+    }
+
+    setSelectedScreenId((current) => {
+      if (current && dashboard.screens.some((screen) => screen.id === current)) {
+        return current;
+      }
+
+      return dashboard.screens[0].id;
+    });
+  }, [dashboard.screens]);
+
+  useEffect(() => {
+    const screen = dashboard.screens.find((entry) => entry.id === selectedScreenId);
+    if (!screen) {
+      return;
+    }
+
+    setDeviceProfileForm(toDeviceProfileForm(screen));
+  }, [selectedScreenId, dashboard.screens]);
+
   const onlineScreens = useMemo(
     () => dashboard.screens.filter((screen) => isOnline(screen.lastSeenAt)).length,
     [dashboard.screens]
@@ -290,6 +378,13 @@ function App() {
     [dashboard.events]
   );
 
+  const waitingPairings = useMemo(
+    () => dashboard.devicePairings.filter((entry) => entry.status === "waiting").length,
+    [dashboard.devicePairings]
+  );
+
+  const recentCommands = useMemo(() => dashboard.deviceCommands.slice(0, 10), [dashboard.deviceCommands]);
+
   const playlistCards = useMemo(
     () =>
       dashboard.playlists.map((playlist) => ({
@@ -301,7 +396,48 @@ function App() {
     [dashboard.playlists, dashboard.playlistItems]
   );
 
+  const selectedScreen = useMemo(
+    () => dashboard.screens.find((screen) => screen.id === selectedScreenId) ?? null,
+    [dashboard.screens, selectedScreenId]
+  );
+
   const canSeeAllClients = authRecord?.role === "owner" || !authRecord?.client;
+  const canManageUsers = authRecord?.role === "owner" || authRecord?.role === "manager";
+  const installUrl =
+    typeof window === "undefined"
+      ? "https://cms.berry-secure.pl/app/maasck.apk"
+      : new URL("/app/maasck.apk", window.location.origin).toString();
+
+  useEffect(() => {
+    if (!pb.authStore.isValid || typeof window === "undefined") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkApk = async () => {
+      try {
+        const response = await fetch(installUrl, {
+          method: "HEAD",
+          cache: "no-store"
+        });
+
+        if (!cancelled) {
+          setApkAvailable(response.ok);
+        }
+      } catch {
+        if (!cancelled) {
+          setApkAvailable(false);
+        }
+      }
+    };
+
+    void checkApk();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [installUrl, authRecord?.id]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -377,32 +513,181 @@ function App() {
     }
   }
 
-  async function handleCreateScreen(event: FormEvent<HTMLFormElement>) {
+  async function handleCreateCmsUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    try {
-      await pb.collection("screen_users").create({
-        email: screenForm.email.trim(),
-        password: screenForm.password,
-        passwordConfirm: screenForm.password,
-        name: screenForm.name,
-        client: screenForm.client,
-        channel: screenForm.channel,
-        locationLabel: screenForm.locationLabel,
-        volumePercent: Number(screenForm.volumePercent) || 80,
-        status: "offline",
-        notes: screenForm.notes
+    if (!canManageUsers) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Twoja rola nie może tworzyć nowych kont CMS."
       });
+      return;
+    }
 
-      setScreenForm(defaultScreenForm);
+    if (authRecord?.role !== "owner" && cmsUserForm.role === "owner") {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Tylko owner może tworzyć kolejnego ownera."
+      });
+      return;
+    }
+
+    const clientId = cmsUserForm.client || authRecord?.client || "";
+    if (cmsUserForm.role !== "owner" && !clientId) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Manager i editor muszą być przypięci do klienta."
+      });
+      return;
+    }
+
+    try {
+      await pb.collection("cms_users").create(
+        compactRecord({
+          email: cmsUserForm.email.trim(),
+          password: cmsUserForm.password,
+          passwordConfirm: cmsUserForm.password,
+          name: cmsUserForm.name,
+          role: cmsUserForm.role,
+          client: cmsUserForm.role === "owner" ? undefined : clientId
+        })
+      );
+
+      setCmsUserForm(defaultCmsUserForm);
       showFlash(setFlash, {
         kind: "success",
-        text: "Ekran i konto logowania dla playera zostały utworzone."
+        text: "Nowe konto CMS zostało utworzone."
       });
     } catch (error) {
       showFlash(setFlash, {
         kind: "error",
-        text: readError(error, "Nie udało się utworzyć ekranu.")
+        text: readError(error, "Nie udało się utworzyć użytkownika CMS.")
+      });
+    }
+  }
+
+  async function handlePairDevice(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const pairingCode = normalizePairingCode(pairingForm.pairingCode);
+    const pairing = dashboard.devicePairings.find(
+      (entry) => normalizePairingCode(entry.pairingCode) === pairingCode && entry.status === "waiting"
+    );
+
+    if (!pairing) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Nie znaleziono aktywnego kodu parowania. Sprawdź ekran TV i spróbuj ponownie."
+      });
+      return;
+    }
+
+    const clientId = pairingForm.client || authRecord?.client || "";
+    if (!clientId) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Wybierz klienta, do którego ma trafić urządzenie."
+      });
+      return;
+    }
+
+    if (!pairingForm.channel) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Wybierz kanał, do którego przypniesz urządzenie."
+      });
+      return;
+    }
+
+    const deviceName = pairingForm.name.trim() || pairing.deviceName || `Android TV ${pairingCode}`;
+    const locationLabel =
+      pairingForm.locationLabel.trim() || pairing.locationLabel || `${deviceName} / nowa instalacja`;
+    const email = buildPairingEmail(deviceName, pairingCode);
+
+    try {
+      const createdScreen = await pb.collection("screen_users").create({
+        email,
+        password: pairingCode,
+        passwordConfirm: pairingCode,
+        name: deviceName,
+        client: clientId,
+        channel: pairingForm.channel,
+        locationLabel,
+        volumePercent: Number(pairingForm.volumePercent) || 80,
+        status: "pairing",
+        notes: pairingForm.notes,
+        desiredDisplayState: "active",
+        deviceModel: pairing.deviceName,
+        appVersion: pairing.appVersion,
+        networkMode: "dhcp"
+      });
+
+      await pb.collection("device_pairings").update(pairing.id, {
+        status: "paired",
+        client: clientId,
+        channel: pairingForm.channel,
+        locationLabel,
+        screen: createdScreen.id,
+        assignedEmail: email,
+        claimedAt: new Date().toISOString()
+      });
+
+      setPairingForm(defaultPairingForm);
+      setSelectedScreenId(createdScreen.id);
+      showFlash(setFlash, {
+        kind: "success",
+        text: `Urządzenie sparowane. Player zaloguje się jako ${email}.`
+      });
+    } catch (error) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: readError(error, "Nie udało się sparować urządzenia.")
+      });
+    }
+  }
+
+  async function handleUpdateDeviceProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedScreen) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Najpierw wybierz urządzenie do edycji."
+      });
+      return;
+    }
+
+    const nextDisplayState = deviceProfileForm.desiredDisplayState as "active" | "blackout";
+
+    try {
+      await pb.collection("screen_users").update(selectedScreen.id, {
+        volumePercent: Number(deviceProfileForm.volumePercent) || 80,
+        desiredDisplayState: nextDisplayState,
+        networkMode: deviceProfileForm.networkMode,
+        networkAddress: deviceProfileForm.networkAddress,
+        networkGateway: deviceProfileForm.networkGateway,
+        networkDns: deviceProfileForm.networkDns,
+        wifiSsid: deviceProfileForm.wifiSsid,
+        networkNotes: deviceProfileForm.networkNotes,
+        notes: deviceProfileForm.notes
+      });
+
+      if (selectedScreen.desiredDisplayState !== nextDisplayState) {
+        await queueDeviceCommand(
+          selectedScreen.id,
+          nextDisplayState === "blackout" ? "blackout" : "wake",
+          false
+        );
+      }
+
+      showFlash(setFlash, {
+        kind: "success",
+        text: "Profil urządzenia został zaktualizowany."
+      });
+    } catch (error) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: readError(error, "Nie udało się zaktualizować urządzenia.")
       });
     }
   }
@@ -447,13 +732,15 @@ function App() {
     event.preventDefault();
 
     try {
-      await pb.collection("playlists").create(compactRecord({
-        client: playlistForm.client,
-        channel: playlistForm.channel || undefined,
-        name: playlistForm.name,
-        isActive: playlistForm.isActive,
-        notes: playlistForm.notes
-      }));
+      await pb.collection("playlists").create(
+        compactRecord({
+          client: playlistForm.client,
+          channel: playlistForm.channel || undefined,
+          name: playlistForm.name,
+          isActive: playlistForm.isActive,
+          notes: playlistForm.notes
+        })
+      );
       setPlaylistForm(defaultPlaylistForm);
       showFlash(setFlash, {
         kind: "success",
@@ -502,19 +789,21 @@ function App() {
     event.preventDefault();
 
     try {
-      await pb.collection("schedule_rules").create(compactRecord({
-        client: scheduleForm.client,
-        channel: scheduleForm.channel,
-        playlist: scheduleForm.playlist,
-        label: scheduleForm.label,
-        startDate: toIsoDate(scheduleForm.startDate) || undefined,
-        endDate: toIsoDate(scheduleForm.endDate) || undefined,
-        startTime: scheduleForm.startTime,
-        endTime: scheduleForm.endTime,
-        daysOfWeek: scheduleForm.daysOfWeek,
-        priority: Number(scheduleForm.priority) || 100,
-        isActive: scheduleForm.isActive
-      }));
+      await pb.collection("schedule_rules").create(
+        compactRecord({
+          client: scheduleForm.client,
+          channel: scheduleForm.channel,
+          playlist: scheduleForm.playlist,
+          label: scheduleForm.label,
+          startDate: toIsoDate(scheduleForm.startDate) || undefined,
+          endDate: toIsoDate(scheduleForm.endDate) || undefined,
+          startTime: scheduleForm.startTime,
+          endTime: scheduleForm.endTime,
+          daysOfWeek: scheduleForm.daysOfWeek,
+          priority: Number(scheduleForm.priority) || 100,
+          isActive: scheduleForm.isActive
+        })
+      );
       setScheduleForm(defaultScheduleForm);
       showFlash(setFlash, {
         kind: "success",
@@ -532,18 +821,20 @@ function App() {
     event.preventDefault();
 
     try {
-      await pb.collection("events").create(compactRecord({
-        client: eventForm.client,
-        channel: eventForm.channel || undefined,
-        screen: eventForm.screen || undefined,
-        playlist: eventForm.playlist,
-        title: eventForm.title,
-        message: eventForm.message,
-        startsAt: toIsoDateTime(eventForm.startsAt),
-        endsAt: toIsoDateTime(eventForm.endsAt),
-        priority: Number(eventForm.priority) || 300,
-        isActive: eventForm.isActive
-      }));
+      await pb.collection("events").create(
+        compactRecord({
+          client: eventForm.client,
+          channel: eventForm.channel || undefined,
+          screen: eventForm.screen || undefined,
+          playlist: eventForm.playlist,
+          title: eventForm.title,
+          message: eventForm.message,
+          startsAt: toIsoDateTime(eventForm.startsAt),
+          endsAt: toIsoDateTime(eventForm.endsAt),
+          priority: Number(eventForm.priority) || 300,
+          isActive: eventForm.isActive
+        })
+      );
       setEventForm(defaultEventForm);
       showFlash(setFlash, {
         kind: "success",
@@ -557,7 +848,68 @@ function App() {
     }
   }
 
+  async function queueDeviceCommand(
+    screenId: string,
+    commandType: DeviceCommandRecord["commandType"],
+    mirrorDisplayState = true
+  ) {
+    const payload =
+      commandType === "blackout" || commandType === "wake"
+        ? JSON.stringify({
+            desiredDisplayState: commandType === "blackout" ? "blackout" : "active"
+          })
+        : "";
+
+    if (mirrorDisplayState) {
+      if (commandType === "blackout") {
+        await pb.collection("screen_users").update(screenId, {
+          desiredDisplayState: "blackout"
+        });
+      }
+
+      if (commandType === "wake") {
+        await pb.collection("screen_users").update(screenId, {
+          desiredDisplayState: "active"
+        });
+      }
+    }
+
+    await pb.collection("device_commands").create(
+      compactRecord({
+        screen: screenId,
+        commandType,
+        payload,
+        status: "queued",
+        issuedBy: authRecord?.id || undefined,
+        expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
+      })
+    );
+  }
+
+  async function handleQueueCommand(screen: ScreenUserRecord, commandType: DeviceCommandRecord["commandType"]) {
+    try {
+      await queueDeviceCommand(screen.id, commandType);
+      showFlash(setFlash, {
+        kind: "success",
+        text: `Komenda ${commandType} została zakolejkowana dla ${screen.locationLabel || screen.name}.`
+      });
+    } catch (error) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: readError(error, "Nie udało się wysłać komendy do urządzenia.")
+      });
+    }
+  }
+
   async function handleDelete(collection: string, id: string, label: string) {
+    if (collection === "cms_users" && id === authRecord?.id) {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Nie usuwaj właśnie zalogowanego konta."
+      });
+      return;
+    }
+
     const confirmed = window.confirm(`Usunąć ${label}?`);
     if (!confirmed) {
       return;
@@ -573,6 +925,21 @@ function App() {
       showFlash(setFlash, {
         kind: "error",
         text: readError(error, `Nie udało się usunąć: ${label}.`)
+      });
+    }
+  }
+
+  async function handleCopyInstallUrl() {
+    try {
+      await navigator.clipboard.writeText(installUrl);
+      showFlash(setFlash, {
+        kind: "success",
+        text: "Link do instalacji został skopiowany do schowka."
+      });
+    } catch {
+      showFlash(setFlash, {
+        kind: "error",
+        text: "Nie udało się skopiować linku. Skopiuj go ręcznie z panelu."
       });
     }
   }
@@ -603,10 +970,11 @@ function App() {
       <div className="auth-shell">
         <div className="auth-copy">
           <span className="eyebrow">Signal Deck</span>
-          <h1>Zgrabny CMS pod Twoje DS, od razu gotowy pod `cms.berry-secure.pl`.</h1>
+          <h1>DS z CMS-em, parowaniem Android TV i szybką obsługą sieci ekranów.</h1>
           <p>
             Panel loguje się do kolekcji <code>cms_users</code> w PocketBase i po zalogowaniu
-            obsługuje klientów, kanały, ekrany, media, playlisty, scheduling oraz eventy override.
+            obsługuje klientów, użytkowników CMS, urządzenia, screenshoty, media, playlisty,
+            scheduling oraz eventy override.
           </p>
           <div className="auth-note">
             <span>API</span>
@@ -702,6 +1070,7 @@ function App() {
           </div>
           <div className="topbar-meta">
             <MetricBadge label="Online" value={`${onlineScreens}/${dashboard.screens.length}`} />
+            <MetricBadge label="Pairing queue" value={String(waitingPairings)} />
             <MetricBadge label="Schedule today" value={String(scheduledToday)} />
             <MetricBadge label="Active events" value={String(activeEvents)} />
           </div>
@@ -719,61 +1088,46 @@ function App() {
               <div className="stats-grid">
                 <StatCard label="Klienci" value={String(dashboard.clients.length)} />
                 <StatCard label="Kanały" value={String(dashboard.channels.length)} />
+                <StatCard label="Użytkownicy CMS" value={String(dashboard.cmsUsers.length)} />
                 <StatCard label="Ekrany online" value={String(onlineScreens)} />
+                <StatCard label="Pairing w kolejce" value={String(waitingPairings)} />
                 <StatCard label="Biblioteka media" value={String(dashboard.mediaAssets.length)} />
               </div>
             </Panel>
 
-            <Panel title="Ekrany" subtitle="Ostatni heartbeat i przypięte kanały">
+            <Panel title="Nowe urządzenia" subtitle="Kody gotowe do wpisania w sekcji Add New Device">
               <div className="list-stack">
-                {dashboard.screens.map((screen) => (
-                  <RecordRow
-                    key={screen.id}
-                    title={screen.locationLabel || screen.name}
-                    subtitle={`${screen.expand?.client?.name || "Brak klienta"} • ${
-                      screen.expand?.channel?.name || "Brak kanału"
-                    }`}
-                    meta={screen.email}
-                    badge={<StatusBadge status={statusFromHeartbeat(screen)} />}
-                    action={
-                      <button
-                        className="danger-button"
-                        onClick={() => handleDelete("screen_users", screen.id, screen.name)}
-                        type="button"
-                      >
-                        Usuń
-                      </button>
-                    }
-                  />
-                ))}
-                {!dashboard.screens.length ? <EmptyState text="Brak ekranów w sieci." /> : null}
+                {dashboard.devicePairings
+                  .filter((pairing) => pairing.status === "waiting")
+                  .slice(0, 6)
+                  .map((pairing) => (
+                    <RecordRow
+                      key={pairing.id}
+                      title={pairing.deviceName}
+                      subtitle={`${pairing.platform || "platforma?"} • ${pairing.appVersion || "brak wersji"}`}
+                      meta={`kod ${pairing.pairingCode} • wygasa ${formatDateTime(pairing.pairingExpiresAt)}`}
+                      badge={<span className="soft-badge">{pairing.status}</span>}
+                    />
+                  ))}
+                {!waitingPairings ? (
+                  <EmptyState text="Nie ma urządzeń czekających na sparowanie." />
+                ) : null}
               </div>
             </Panel>
 
-            <Panel title="Eventy override" subtitle="Najwyższy priorytet zbliża się lub już gra">
+            <Panel title="Ostatnie komendy" subtitle="To, co poleciało do Android TV z panelu">
               <div className="list-stack">
-                {dashboard.events.slice(0, 6).map((event) => (
+                {recentCommands.map((command) => (
                   <RecordRow
-                    key={event.id}
-                    title={event.title}
-                    subtitle={`${event.expand?.client?.name || "Brak klienta"} • ${
-                      event.expand?.playlist?.name || "Brak playlisty"
-                    }`}
-                    meta={`${formatDateTime(event.startsAt)} → ${formatDateTime(event.endsAt)}`}
-                    badge={<PriorityBadge value={event.priority} />}
-                    action={
-                      <button
-                        className="danger-button"
-                        onClick={() => handleDelete("events", event.id, event.title)}
-                        type="button"
-                      >
-                        Usuń
-                      </button>
-                    }
+                    key={command.id}
+                    title={translateCommand(command.commandType)}
+                    subtitle={command.expand?.screen?.locationLabel || command.expand?.screen?.name || "Urządzenie"}
+                    meta={`${command.status} • ${formatDateTime(command.created)}`}
+                    badge={<span className="soft-badge">{command.status}</span>}
                   />
                 ))}
-                {!dashboard.events.length ? (
-                  <EmptyState text="Brak eventów override. Harmonogram działa samodzielnie." />
+                {!recentCommands.length ? (
+                  <EmptyState text="Nie ma jeszcze żadnych zdalnych komend." />
                 ) : null}
               </div>
             </Panel>
@@ -921,101 +1275,89 @@ function App() {
           </section>
         ) : null}
 
-        {activeSection === "screens" ? (
+        {activeSection === "users" ? (
           <section className="section-grid">
-            <Panel title="Nowy ekran" subtitle="Tworzy konto logowania dla playera">
-              <form className="form-grid" onSubmit={handleCreateScreen}>
-                <TextField
-                  label="Nazwa konta"
-                  value={screenForm.name}
-                  onChange={(value) => setScreenForm((current) => ({ ...current, name: value }))}
-                  placeholder="TV Lobby 01"
-                  required
-                />
-                <TextField
-                  label="Lokalizacja"
-                  value={screenForm.locationLabel}
-                  onChange={(value) =>
-                    setScreenForm((current) => ({ ...current, locationLabel: value }))
-                  }
-                  placeholder="Warszawa / recepcja"
-                  required
-                />
-                <SelectField
-                  label="Klient"
-                  value={screenForm.client}
-                  onChange={(value) => setScreenForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required
-                />
-                <SelectField
-                  label="Kanał"
-                  value={screenForm.channel}
-                  onChange={(value) => setScreenForm((current) => ({ ...current, channel: value }))}
-                  options={dashboard.channels
-                    .filter((channel) => !screenForm.client || channel.client === screenForm.client)
-                    .map((channel) => ({ value: channel.id, label: channel.name }))}
-                  required
-                />
-                <TextField
-                  label="Email loginu"
-                  value={screenForm.email}
-                  onChange={(value) => setScreenForm((current) => ({ ...current, email: value }))}
-                  type="email"
-                  placeholder="tv-lobby-01@berry-secure.pl"
-                  required
-                />
-                <TextField
-                  label="Hasło"
-                  value={screenForm.password}
-                  onChange={(value) =>
-                    setScreenForm((current) => ({ ...current, password: value }))
-                  }
-                  type="password"
-                  placeholder="Mocne hasło dla playera"
-                  required
-                />
-                <TextField
-                  label="Głośność %"
-                  value={screenForm.volumePercent}
-                  onChange={(value) =>
-                    setScreenForm((current) => ({ ...current, volumePercent: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <TextAreaField
-                  label="Notatki"
-                  value={screenForm.notes}
-                  onChange={(value) => setScreenForm((current) => ({ ...current, notes: value }))}
-                  placeholder="Android TV Philips, zasilanie z listwy UPS"
-                />
-                <button className="primary-button" type="submit">
-                  Dodaj ekran
-                </button>
-              </form>
+            <Panel title="Nowe konto CMS" subtitle="Tworzenie i usuwanie kont operatorów panelu">
+              {canManageUsers ? (
+                <form className="form-grid" onSubmit={handleCreateCmsUser}>
+                  <TextField
+                    label="Imię / nazwa"
+                    value={cmsUserForm.name}
+                    onChange={(value) => setCmsUserForm((current) => ({ ...current, name: value }))}
+                    placeholder="Anna Admin"
+                    required
+                  />
+                  <TextField
+                    label="Email"
+                    value={cmsUserForm.email}
+                    onChange={(value) => setCmsUserForm((current) => ({ ...current, email: value }))}
+                    type="email"
+                    placeholder="anna@berry-secure.pl"
+                    required
+                  />
+                  <TextField
+                    label="Hasło"
+                    value={cmsUserForm.password}
+                    onChange={(value) =>
+                      setCmsUserForm((current) => ({ ...current, password: value }))
+                    }
+                    type="password"
+                    placeholder="Mocne hasło"
+                    required
+                  />
+                  <SelectField
+                    label="Rola"
+                    value={cmsUserForm.role}
+                    onChange={(value) =>
+                      setCmsUserForm((current) => ({
+                        ...current,
+                        role: value as "owner" | "manager" | "editor"
+                      }))
+                    }
+                    options={[
+                      { value: "manager", label: "Manager" },
+                      { value: "editor", label: "Editor" },
+                      ...(authRecord?.role === "owner"
+                        ? [{ value: "owner", label: "Owner" }]
+                        : [])
+                    ]}
+                    required
+                  />
+                  <SelectField
+                    label="Klient"
+                    value={cmsUserForm.client}
+                    onChange={(value) => setCmsUserForm((current) => ({ ...current, client: value }))}
+                    options={[
+                      { value: "", label: "Brak przypięcia / owner globalny" },
+                      ...dashboard.clients.map((client) => ({
+                        value: client.id,
+                        label: client.name
+                      }))
+                    ]}
+                  />
+                  <button className="primary-button" type="submit">
+                    Dodaj konto CMS
+                  </button>
+                </form>
+              ) : (
+                <EmptyState text="Twoja rola może przeglądać użytkowników, ale nie tworzy nowych kont." />
+              )}
             </Panel>
 
-            <Panel title="Ekrany i dostępy" subtitle="Te dane wpiszesz później do playera">
+            <Panel title="Użytkownicy CMS" subtitle="Kto ma dostęp do panelu i do którego klienta">
               <div className="list-stack">
-                {dashboard.screens.map((screen) => (
+                {dashboard.cmsUsers.map((user) => (
                   <RecordRow
-                    key={screen.id}
-                    title={screen.locationLabel || screen.name}
-                    subtitle={`${screen.email} • ${
-                      screen.expand?.channel?.name || "Brak kanału"
-                    }`}
-                    meta={`Głośność ${screen.volumePercent}% • ostatni heartbeat ${
-                      formatHeartbeat(screen.lastSeenAt) || "brak"
-                    }`}
-                    badge={<StatusBadge status={statusFromHeartbeat(screen)} />}
+                    key={user.id}
+                    title={user.name || user.email}
+                    subtitle={`${user.email} • ${user.role}`}
+                    meta={user.expand?.client?.name || "Globalny dostęp"}
+                    badge={<span className="soft-badge">{user.role}</span>}
                     action={
                       <button
                         className="danger-button"
-                        onClick={() => handleDelete("screen_users", screen.id, screen.name)}
+                        disabled={user.id === authRecord?.id}
+                        onClick={() => handleDelete("cms_users", user.id, user.name || user.email)}
                         type="button"
                       >
                         Usuń
@@ -1023,7 +1365,299 @@ function App() {
                     }
                   />
                 ))}
-                {!dashboard.screens.length ? <EmptyState text="Nie ma jeszcze żadnych ekranów." /> : null}
+                {!dashboard.cmsUsers.length ? <EmptyState text="Brak kont CMS do pokazania." /> : null}
+              </div>
+            </Panel>
+          </section>
+        ) : null}
+
+        {activeSection === "screens" ? (
+          <section className="section-grid">
+            <Panel title="Add New Device" subtitle="Wpisz kod z TV, przypnij klienta i kanał">
+              <form className="form-grid" onSubmit={handlePairDevice}>
+                <TextField
+                  label="Kod z telewizora"
+                  value={pairingForm.pairingCode}
+                  onChange={(value) =>
+                    setPairingForm((current) => ({
+                      ...current,
+                      pairingCode: normalizePairingCode(value)
+                    }))
+                  }
+                  placeholder="A7K4P2"
+                  required
+                />
+                <TextField
+                  label="Nazwa urządzenia"
+                  value={pairingForm.name}
+                  onChange={(value) => setPairingForm((current) => ({ ...current, name: value }))}
+                  placeholder="Android TV Lobby"
+                />
+                <SelectField
+                  label="Klient"
+                  value={pairingForm.client}
+                  onChange={(value) => setPairingForm((current) => ({ ...current, client: value }))}
+                  options={dashboard.clients.map((client) => ({
+                    value: client.id,
+                    label: client.name
+                  }))}
+                  required={!authRecord?.client}
+                />
+                <SelectField
+                  label="Kanał"
+                  value={pairingForm.channel}
+                  onChange={(value) => setPairingForm((current) => ({ ...current, channel: value }))}
+                  options={dashboard.channels
+                    .filter((channel) => {
+                      const clientId = pairingForm.client || authRecord?.client;
+                      return !clientId || channel.client === clientId;
+                    })
+                    .map((channel) => ({
+                      value: channel.id,
+                      label: channel.name
+                    }))}
+                  required
+                />
+                <TextField
+                  label="Lokalizacja"
+                  value={pairingForm.locationLabel}
+                  onChange={(value) =>
+                    setPairingForm((current) => ({ ...current, locationLabel: value }))
+                  }
+                  placeholder="Warszawa / recepcja"
+                />
+                <TextField
+                  label="Głośność %"
+                  value={pairingForm.volumePercent}
+                  onChange={(value) =>
+                    setPairingForm((current) => ({ ...current, volumePercent: value }))
+                  }
+                  type="number"
+                  required
+                />
+                <TextAreaField
+                  label="Notatki do urządzenia"
+                  value={pairingForm.notes}
+                  onChange={(value) => setPairingForm((current) => ({ ...current, notes: value }))}
+                  placeholder="Samsung Android TV, zasilanie z UPS, kiosk mode."
+                />
+                <button className="primary-button" type="submit">
+                  Sparuj urządzenie
+                </button>
+              </form>
+            </Panel>
+
+            <Panel title="Kod oczekujące" subtitle="Świeże instalacje, które wyświetlają kod na TV">
+              <div className="list-stack">
+                {dashboard.devicePairings
+                  .filter((pairing) => pairing.status === "waiting")
+                  .map((pairing) => (
+                    <RecordRow
+                      key={pairing.id}
+                      title={pairing.deviceName}
+                      subtitle={`${pairing.platform || "platforma?"} • ${pairing.appVersion || "brak wersji"}`}
+                      meta={`kod ${pairing.pairingCode} • ostatni heartbeat ${formatHeartbeat(pairing.lastSeenAt) || "brak"}`}
+                      badge={<span className="soft-badge">waiting</span>}
+                    />
+                  ))}
+                {!waitingPairings ? <EmptyState text="Brak kodów czekających na przypięcie." /> : null}
+              </div>
+            </Panel>
+
+            <Panel title="Profil urządzenia" subtitle="Zdalny blackout, sieć i parametry wybranego ekranu">
+              {selectedScreen ? (
+                <form className="form-grid" onSubmit={handleUpdateDeviceProfile}>
+                  <SelectField
+                    label="Urządzenie"
+                    value={selectedScreenId}
+                    onChange={setSelectedScreenId}
+                    options={dashboard.screens.map((screen) => ({
+                      value: screen.id,
+                      label: `${screen.locationLabel || screen.name} • ${screen.expand?.channel?.name || "bez kanału"}`
+                    }))}
+                    required
+                  />
+                  <TextField
+                    label="Głośność %"
+                    value={deviceProfileForm.volumePercent}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, volumePercent: value }))
+                    }
+                    type="number"
+                    required
+                  />
+                  <SelectField
+                    label="Tryb ekranu"
+                    value={deviceProfileForm.desiredDisplayState}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({
+                        ...current,
+                        desiredDisplayState: value
+                      }))
+                    }
+                    options={[
+                      { value: "active", label: "Aktywny" },
+                      { value: "blackout", label: "Czarny ekran / blackout" }
+                    ]}
+                    required
+                  />
+                  <SelectField
+                    label="Tryb sieci"
+                    value={deviceProfileForm.networkMode}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, networkMode: value }))
+                    }
+                    options={[
+                      { value: "dhcp", label: "DHCP / automatyczny" },
+                      { value: "manual", label: "Manual / statyczny" }
+                    ]}
+                    required
+                  />
+                  <TextField
+                    label="Adres IP"
+                    value={deviceProfileForm.networkAddress}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, networkAddress: value }))
+                    }
+                    placeholder="192.168.1.120"
+                  />
+                  <TextField
+                    label="Gateway"
+                    value={deviceProfileForm.networkGateway}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, networkGateway: value }))
+                    }
+                    placeholder="192.168.1.1"
+                  />
+                  <TextField
+                    label="DNS"
+                    value={deviceProfileForm.networkDns}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, networkDns: value }))
+                    }
+                    placeholder="1.1.1.1,8.8.8.8"
+                  />
+                  <TextField
+                    label="Wi-Fi SSID"
+                    value={deviceProfileForm.wifiSsid}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, wifiSsid: value }))
+                    }
+                    placeholder="Berry-Secure-Guest"
+                  />
+                  <TextAreaField
+                    label="Notatki sieciowe"
+                    value={deviceProfileForm.networkNotes}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, networkNotes: value }))
+                    }
+                    placeholder="Na stock Android TV te dane traktuj jako profil operacyjny. Bez uprawnień MDM aplikacja nie zmieni ich po cichu."
+                  />
+                  <TextAreaField
+                    label="Notatki urządzenia"
+                    value={deviceProfileForm.notes}
+                    onChange={(value) =>
+                      setDeviceProfileForm((current) => ({ ...current, notes: value }))
+                    }
+                    placeholder="Pilot w szufladzie recepcji, ekran 55 cali."
+                  />
+                  <button className="primary-button" type="submit">
+                    Zapisz profil
+                  </button>
+                </form>
+              ) : (
+                <EmptyState text="Nie masz jeszcze żadnego urządzenia do edycji." />
+              )}
+            </Panel>
+
+            <Panel title="Urządzenia i screenshoty" subtitle="Status online/offline, podgląd ostatniej klatki i zdalne akcje">
+              <div className="device-grid">
+                {dashboard.screens.map((screen) => (
+                  <article className="device-card" key={screen.id}>
+                    <div className="device-screenshot">
+                      {screen.lastScreenshot ? (
+                        <img
+                          alt={`Screenshot ${screen.locationLabel || screen.name}`}
+                          src={getProtectedFileUrl(screen, screen.lastScreenshot, fileToken)}
+                        />
+                      ) : (
+                        <div className="device-placeholder">
+                          <span className="eyebrow">no screenshot</span>
+                          <strong>{screen.locationLabel || screen.name}</strong>
+                          <small>Player jeszcze nie wysłał podglądu.</small>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="device-copy">
+                      <div className="device-head">
+                        <div>
+                          <h3>{screen.locationLabel || screen.name}</h3>
+                          <p>
+                            {screen.expand?.client?.name || "Brak klienta"} •{" "}
+                            {screen.expand?.channel?.name || "Brak kanału"}
+                          </p>
+                        </div>
+                        <StatusBadge status={statusFromHeartbeat(screen)} />
+                      </div>
+
+                      <div className="device-meta">
+                        <span>{screen.email}</span>
+                        <span>IP: {screen.lastIpAddress || "brak"}</span>
+                        <span>
+                          screenshot {screen.lastScreenshotAt ? formatHeartbeat(screen.lastScreenshotAt) : "brak"}
+                        </span>
+                        <span>
+                          heartbeat {screen.lastSeenAt ? formatHeartbeat(screen.lastSeenAt) : "brak"}
+                        </span>
+                      </div>
+
+                      <div className="device-command-row">
+                        <button
+                          className="ghost-button"
+                          onClick={() => void handleQueueCommand(screen, "sync")}
+                          type="button"
+                        >
+                          Sync
+                        </button>
+                        <button
+                          className="ghost-button"
+                          onClick={() => void handleQueueCommand(screen, "capture_screenshot")}
+                          type="button"
+                        >
+                          Screenshot
+                        </button>
+                        <button
+                          className="ghost-button"
+                          onClick={() =>
+                            void handleQueueCommand(
+                              screen,
+                              screen.desiredDisplayState === "blackout" ? "wake" : "blackout"
+                            )
+                          }
+                          type="button"
+                        >
+                          {screen.desiredDisplayState === "blackout" ? "Włącz ekran" : "Wyłącz ekran"}
+                        </button>
+                        <button
+                          className="ghost-button"
+                          onClick={() => void handleQueueCommand(screen, "restart_app")}
+                          type="button"
+                        >
+                          Restart appki
+                        </button>
+                        <button
+                          className="danger-button"
+                          onClick={() => handleDelete("screen_users", screen.id, screen.name)}
+                          type="button"
+                        >
+                          Usuń
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {!dashboard.screens.length ? <EmptyState text="Nie ma jeszcze żadnych urządzeń." /> : null}
               </div>
             </Panel>
           </section>
@@ -1126,13 +1760,13 @@ function App() {
                     <div className="media-preview">
                       {asset.kind === "video" ? (
                         <video
-                          src={getProtectedFileUrl(asset, fileToken)}
+                          src={getProtectedFileUrl(asset, asset.asset, fileToken)}
                           muted
                           playsInline
                           preload="metadata"
                         />
                       ) : (
-                        <img alt={asset.title} src={getProtectedFileUrl(asset, fileToken)} />
+                        <img alt={asset.title} src={getProtectedFileUrl(asset, asset.asset, fileToken)} />
                       )}
                     </div>
                     <div className="media-copy">
@@ -1204,7 +1838,7 @@ function App() {
                   label="Notatki"
                   value={playlistForm.notes}
                   onChange={(value) => setPlaylistForm((current) => ({ ...current, notes: value }))}
-                  placeholder="Loop na wejście główne, wersja z dźwiękiem."
+                  placeholder="Loop na wejście główne i ekran sprzedażowy."
                 />
                 <ToggleField
                   label="Aktywna"
@@ -1602,6 +2236,69 @@ function App() {
           </section>
         ) : null}
 
+        {activeSection === "app" ? (
+          <section className="section-grid">
+            <Panel title="Instalacja Android TV" subtitle="Link do APK i prosty onboarding dla operatora">
+              <div className="install-grid">
+                <article className="mini-card install-card">
+                  <span className="eyebrow">download</span>
+                  <h3>Publiczny link do APK</h3>
+                  <p className="helper-copy">{installUrl}</p>
+                  <p>{apkAvailable ? "Plik APK jest już opublikowany." : "Plik APK nie jest jeszcze opublikowany."}</p>
+                  <button className="primary-button" onClick={() => void handleCopyInstallUrl()} type="button">
+                    Skopiuj link
+                  </button>
+                </article>
+
+                <article className="mini-card install-card">
+                  <span className="eyebrow">krok 1</span>
+                  <h3>Na TV otwórz link</h3>
+                  <p>
+                    Wpisz w przeglądarce TV dokładnie: <code>{installUrl}</code>
+                  </p>
+                </article>
+
+                <article className="mini-card install-card">
+                  <span className="eyebrow">krok 2</span>
+                  <h3>Player pokaże kod</h3>
+                  <p>
+                    Po pierwszym uruchomieniu apka wyświetli duży kod parowania. Wpisujesz go potem
+                    w sekcji <strong>Add New Device</strong>.
+                  </p>
+                </article>
+
+                <article className="mini-card install-card">
+                  <span className="eyebrow">krok 3</span>
+                  <h3>CMS przypina urządzenie</h3>
+                  <p>
+                    Po sparowaniu TV samo zaloguje się do <code>screen_users</code> i zacznie
+                    raportować status, screenshoty i heartbeat.
+                  </p>
+                </article>
+              </div>
+            </Panel>
+
+            <Panel title="Ostatnie komendy i wdrożenia" subtitle="Szybki podgląd zdalnego sterowania urządzeniami">
+              <div className="list-stack">
+                {recentCommands.map((command) => (
+                  <RecordRow
+                    key={command.id}
+                    title={translateCommand(command.commandType)}
+                    subtitle={command.expand?.screen?.locationLabel || command.expand?.screen?.name || "Urządzenie"}
+                    meta={`${command.status} • ${formatDateTime(command.created)}${
+                      command.resultMessage ? ` • ${command.resultMessage}` : ""
+                    }`}
+                    badge={<span className="soft-badge">{command.status}</span>}
+                  />
+                ))}
+                {!recentCommands.length ? (
+                  <EmptyState text="Po pierwszych akcjach z CMS zobaczysz tu historię komend." />
+                ) : null}
+              </div>
+            </Panel>
+          </section>
+        ) : null}
+
         {!canSeeAllClients ? (
           <footer className="scope-note">
             Widok jest zawężony do klienta: <strong>{authRecord?.expand?.client?.name || authRecord?.client}</strong>
@@ -1618,11 +2315,20 @@ function scopeDashboard(data: DashboardData, authRecord: CmsUserRecord | null): 
   }
 
   const clientId = authRecord.client;
+  const screens = data.screens.filter((screen) => screen.client === clientId);
+  const screenIds = new Set(screens.map((screen) => screen.id));
 
   return {
     clients: data.clients.filter((client) => client.id === clientId),
     channels: data.channels.filter((channel) => channel.client === clientId),
-    screens: data.screens.filter((screen) => screen.client === clientId),
+    cmsUsers: data.cmsUsers.filter(
+      (user) => user.id === authRecord.id || !user.client || user.client === clientId
+    ),
+    screens,
+    devicePairings: data.devicePairings.filter(
+      (pairing) => !pairing.client || pairing.client === clientId || screenIds.has(pairing.screen)
+    ),
+    deviceCommands: data.deviceCommands.filter((command) => screenIds.has(command.screen)),
     mediaAssets: data.mediaAssets.filter((asset) => asset.client === clientId),
     playlists: data.playlists.filter((playlist) => playlist.client === clientId),
     playlistItems: data.playlistItems.filter((item) => item.client === clientId),
@@ -1773,7 +2479,11 @@ function EmptyState({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
 
-function StatusBadge({ status }: { status: "online" | "offline" | "maintenance" }) {
+function StatusBadge({
+  status
+}: {
+  status: "pairing" | "online" | "offline" | "maintenance";
+}) {
   return <span className={`status-badge ${status}`}>{status}</span>;
 }
 
@@ -1781,13 +2491,38 @@ function PriorityBadge({ value }: { value: number }) {
   return <span className="priority-badge">prio {value}</span>;
 }
 
-function getProtectedFileUrl(record: MediaAssetRecord, token: string) {
-  return pb.files.getURL(record, record.asset, token ? { token } : {});
+function toDeviceProfileForm(screen: ScreenUserRecord) {
+  return {
+    screen: screen.id,
+    volumePercent: String(screen.volumePercent || 80),
+    desiredDisplayState: screen.desiredDisplayState || "active",
+    networkMode: screen.networkMode || "dhcp",
+    networkAddress: screen.networkAddress || "",
+    networkGateway: screen.networkGateway || "",
+    networkDns: screen.networkDns || "",
+    wifiSsid: screen.wifiSsid || "",
+    networkNotes: screen.networkNotes || "",
+    notes: screen.notes || ""
+  };
 }
 
-function statusFromHeartbeat(screen: ScreenUserRecord): "online" | "offline" | "maintenance" {
+function getProtectedFileUrl(record: object, fileName: string, token: string) {
+  if (!fileName) {
+    return "";
+  }
+
+  return pb.files.getURL(record as never, fileName, token ? { token } : {});
+}
+
+function statusFromHeartbeat(
+  screen: ScreenUserRecord
+): "pairing" | "online" | "offline" | "maintenance" {
   if (screen.status === "maintenance") {
     return "maintenance";
+  }
+
+  if (screen.status === "pairing" && !screen.lastSeenAt) {
+    return "pairing";
   }
 
   return isOnline(screen.lastSeenAt) ? "online" : "offline";
@@ -1860,6 +2595,35 @@ function formatHeartbeat(value: string) {
   );
 }
 
+function buildPairingEmail(deviceName: string, pairingCode: string) {
+  const base = slugify(deviceName) || "android-tv";
+  return `screen-${base}-${pairingCode.toLowerCase()}@pair.signaldeck.local`;
+}
+
+function normalizePairingCode(value: string) {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 12);
+}
+
+function translateCommand(commandType: DeviceCommandRecord["commandType"]) {
+  switch (commandType) {
+    case "sync":
+      return "Wymuś synchronizację";
+    case "capture_screenshot":
+      return "Pobierz screenshot";
+    case "blackout":
+      return "Wyłącz ekran aplikacji";
+    case "wake":
+      return "Włącz ekran aplikacji";
+    case "restart_app":
+      return "Restart appki";
+    default:
+      return commandType;
+  }
+}
+
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -1875,9 +2639,7 @@ function stripExtension(name: string) {
 }
 
 function compactRecord<T extends Record<string, unknown>>(value: T) {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
-  ) as T;
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 async function readVideoDuration(file: File) {
@@ -1902,7 +2664,10 @@ function readError(error: unknown, fallback: string) {
   return fallback;
 }
 
-function showFlash(setter: (value: FlashMessage | null) => void, flash: FlashMessage) {
+function showFlash(
+  setter: (value: FlashMessage | null) => void,
+  flash: FlashMessage
+) {
   setter(flash);
   window.clearTimeout((showFlash as { timer?: number }).timer);
   (showFlash as { timer?: number }).timer = window.setTimeout(() => setter(null), 4200);

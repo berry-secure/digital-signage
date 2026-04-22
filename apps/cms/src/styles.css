@@ -237,6 +237,15 @@ code {
   transform: translateY(-1px);
 }
 
+.primary-button:disabled,
+.ghost-button:disabled,
+.danger-button:disabled,
+.mini-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
 .flash {
   border-radius: 18px;
   padding: 0.9rem 1rem;
@@ -483,6 +492,107 @@ code {
   display: grid;
 }
 
+.device-grid,
+.install-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.device-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.install-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.device-card {
+  overflow: hidden;
+  display: grid;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.device-screenshot {
+  aspect-ratio: 16 / 9;
+  background:
+    linear-gradient(135deg, rgba(70, 113, 102, 0.14), rgba(212, 106, 59, 0.14)),
+    linear-gradient(180deg, rgba(255, 247, 241, 0.82), rgba(244, 236, 225, 0.82));
+}
+
+.device-screenshot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.device-placeholder {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 0.2rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+.device-placeholder strong {
+  font-family: "Fraunces", serif;
+  font-size: 1.3rem;
+}
+
+.device-placeholder small,
+.helper-copy {
+  color: var(--ink-soft);
+}
+
+.device-copy {
+  padding: 1rem;
+  display: grid;
+  gap: 0.95rem;
+}
+
+.device-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.device-head h3,
+.install-card h3 {
+  margin: 0;
+}
+
+.device-head p,
+.install-card p {
+  margin: 0.35rem 0 0;
+  color: var(--ink-soft);
+}
+
+.device-meta {
+  display: grid;
+  gap: 0.28rem;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+}
+
+.device-command-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.install-card {
+  align-content: start;
+}
+
+.helper-copy {
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
 .media-preview {
   aspect-ratio: 16 / 9;
   background: linear-gradient(135deg, rgba(70, 113, 102, 0.14), rgba(212, 106, 59, 0.14));
@@ -528,6 +638,11 @@ code {
 .status-dot.success {
   background: rgba(45, 122, 102, 0.14);
   color: var(--success);
+}
+
+.status-badge.pairing {
+  background: rgba(212, 106, 59, 0.14);
+  color: var(--accent-dark);
 }
 
 .status-badge.offline,
@@ -605,6 +720,10 @@ code {
   .topbar {
     flex-direction: column;
     align-items: start;
+  }
+
+  .device-head {
+    flex-direction: column;
   }
 }
 

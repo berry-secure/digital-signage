@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Signal Deck Player</string>
+    <string name="title_activity_main">Signal Deck Player</string>
+    <string name="package_name">pl.signaldeck.player</string>
+    <string name="custom_url_scheme">pl.signaldeck.player</string>
+</resources>

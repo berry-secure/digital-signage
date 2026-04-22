@@ -2,6 +2,8 @@ import { Capacitor } from "@capacitor/core";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPocketBaseClient, defaultPocketBaseUrl } from "./lib/pocketbase";
 import type {
+  DeviceCommandRecord,
+  DevicePairingRecord,
   EventRecord,
   PlaybackEntry,
   PlaylistItemRecord,
@@ -10,13 +12,16 @@ import type {
 } from "./types";
 
 const settingsStorageKey = "signal-deck-player-settings";
+const pairingStorageKey = "signal-deck-player-pairing";
+const appVersion = "0.2.0";
 const subscriptions = [
   "screen_users",
   "schedule_rules",
   "events",
   "playlists",
   "playlist_items",
-  "media_assets"
+  "media_assets",
+  "device_commands"
 ] as const;
 
 type Settings = {
@@ -25,11 +30,19 @@ type Settings = {
   password: string;
 };
 
+type PairingSession = {
+  recordId: string;
+  installerId: string;
+  pairingCode: string;
+  createdAt: string;
+};
+
 type SyncState = {
   screen: ScreenUserRecord | null;
   queue: PlaybackEntry[];
   activeSchedule: ScheduleRuleRecord | null;
   activeEvent: EventRecord | null;
+  pendingCommands: DeviceCommandRecord[];
   lastSyncAt: string;
 };
 
@@ -44,6 +57,7 @@ const emptySyncState: SyncState = {
   queue: [],
   activeSchedule: null,
   activeEvent: null,
+  pendingCommands: [],
   lastSyncAt: ""
 };
 
@@ -55,20 +69,30 @@ function App() {
   const [client, setClient] = useState(() =>
     createPocketBaseClient(initialSettings.pocketbaseUrl || defaultPocketBaseUrl)
   );
-  const [showConfig, setShowConfig] = useState<boolean>(!client.authStore.isValid);
+  const [showConfig, setShowConfig] = useState<boolean>(!initialSettings.email);
+  const [pairingSession, setPairingSession] = useState<PairingSession | null>(loadPairingSession());
+  const [pairingRecord, setPairingRecord] = useState<DevicePairingRecord | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(emptySyncState);
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [syncing, setSyncing] = useState(client.authStore.isValid);
   const [flash, setFlash] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [isConnected, setIsConnected] = useState(client.authStore.isValid);
+  const [displayMode, setDisplayMode] = useState<"active" | "blackout">("active");
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
   const imageTimerRef = useRef<number | null>(null);
   const wakeLockRef = useRef<{ release?: () => Promise<void> } | null>(null);
+  const syncRef = useRef<() => Promise<void>>(async () => {});
 
   const queueSignature = useMemo(
     () => syncState.queue.map((item) => item.queueKey).join("|"),
     [syncState.queue]
+  );
+
+  const commandSignature = useMemo(
+    () => syncState.pendingCommands.map((item) => `${item.id}:${item.updated}`).join("|"),
+    [syncState.pendingCommands]
   );
 
   const currentItem = syncState.queue[currentIndex] ?? null;
@@ -82,6 +106,115 @@ function App() {
 
     setCurrentIndex((current) => Math.min(current, Math.max(syncState.queue.length - 1, 0)));
   }, [queueSignature, syncState.queue.length]);
+
+  useEffect(() => {
+    if (!settings.email || !settings.password || client.authStore.isValid) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const reconnect = async () => {
+      try {
+        await client.collection("screen_users").authWithPassword(settings.email, settings.password);
+        if (!cancelled) {
+          setIsConnected(true);
+          setShowConfig(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setShowConfig(true);
+          setIsConnected(false);
+        }
+      }
+    };
+
+    void reconnect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, settings.email, settings.password]);
+
+  useEffect(() => {
+    if (client.authStore.isValid || settings.email.trim()) {
+      setPairingRecord(null);
+      return;
+    }
+
+    let cancelled = false;
+    let poller = 0;
+
+    const boot = async () => {
+      try {
+        const ensured = await ensurePairingSession(client, pairingSession);
+        if (cancelled) {
+          return;
+        }
+
+        setPairingSession(ensured.session);
+        setPairingRecord(ensured.record);
+        savePairingSession(ensured.session);
+        setIsConnected(true);
+
+        const poll = async () => {
+          try {
+            const refreshed = await refreshPairingRecord(client, ensured.session);
+            if (cancelled) {
+              return;
+            }
+
+            setPairingRecord(refreshed);
+
+            if (refreshed.status === "paired" && refreshed.assignedEmail) {
+              await completePairingLogin({
+                client,
+                record: refreshed,
+                session: ensured.session,
+                settings,
+                setSettings,
+                setDraftSettings,
+                setPairingRecord,
+                setPairingSession,
+                setShowConfig,
+                setFlash,
+                setPlaybackUnlocked,
+                setCurrentIndex
+              });
+            }
+          } catch (error) {
+            if (!cancelled) {
+              setIsConnected(false);
+              showFlash(setFlash, {
+                kind: "error",
+                text: readError(error, "Nie udało się odświeżyć kodu parowania.")
+              });
+            }
+          }
+        };
+
+        void poll();
+        poller = window.setInterval(() => {
+          void poll();
+        }, 10000);
+      } catch (error) {
+        if (!cancelled) {
+          setIsConnected(false);
+          showFlash(setFlash, {
+            kind: "error",
+            text: readError(error, "Nie udało się uruchomić trybu parowania.")
+          });
+        }
+      }
+    };
+
+    void boot();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(poller);
+    };
+  }, [client, pairingSession, settings]);
 
   useEffect(() => {
     if (!client.authStore.isValid) {
@@ -108,6 +241,7 @@ function App() {
         }
 
         setSyncState(nextState);
+        setDisplayMode(nextState.screen?.desiredDisplayState || "active");
         setIsConnected(true);
       } catch (error) {
         if (!cancelled) {
@@ -124,7 +258,9 @@ function App() {
       }
     };
 
+    syncRef.current = runSync;
     void runSync();
+
     const poller = window.setInterval(() => {
       void runSync();
     }, 30000);
@@ -158,9 +294,12 @@ function App() {
     const sendHeartbeat = async () => {
       try {
         await client.collection("screen_users").update(syncState.screen!.id, {
-          status: "online",
+          status: syncState.screen!.status === "maintenance" ? "maintenance" : "online",
           lastSeenAt: new Date().toISOString(),
-          lastPlaybackAt: currentItem ? new Date().toISOString() : syncState.screen!.lastPlaybackAt
+          lastPlaybackAt: currentItem ? new Date().toISOString() : syncState.screen!.lastPlaybackAt,
+          desiredDisplayState: displayMode,
+          deviceModel: getDeviceDescriptor(),
+          appVersion
         });
       } catch {
         setIsConnected(false);
@@ -176,10 +315,10 @@ function App() {
     return () => {
       window.clearInterval(heartbeat);
     };
-  }, [client, currentItem, syncState.screen]);
+  }, [client, currentItem, displayMode, syncState.screen]);
 
   useEffect(() => {
-    if (!currentItem || !playbackUnlocked) {
+    if (!currentItem || !playbackUnlocked || displayMode === "blackout") {
       return;
     }
 
@@ -217,7 +356,124 @@ function App() {
       });
       setPlaybackUnlocked(false);
     });
-  }, [currentItem, playbackUnlocked, syncState.queue]);
+  }, [currentItem, playbackUnlocked, displayMode, syncState.queue]);
+
+  useEffect(() => {
+    if (!syncState.screen || !commandSignature) {
+      return;
+    }
+
+    const screen = syncState.screen;
+    let cancelled = false;
+
+    const process = async () => {
+      for (const command of syncState.pendingCommands) {
+        if (cancelled) {
+          return;
+        }
+
+        try {
+          await client.collection("device_commands").update(command.id, {
+            status: "processing"
+          });
+
+          switch (command.commandType) {
+            case "blackout":
+              setDisplayMode("blackout");
+              break;
+            case "wake":
+              setDisplayMode("active");
+              break;
+            case "sync":
+              await syncRef.current();
+              break;
+            case "capture_screenshot":
+              await captureSnapshot(client, screen, {
+                currentItem,
+                displayMode,
+                imageElement: imageRef.current,
+                nowLabel,
+                playbackUnlocked,
+                videoElement: videoRef.current
+              });
+              break;
+            case "restart_app":
+              await client.collection("device_commands").update(command.id, {
+                status: "done",
+                processedAt: new Date().toISOString(),
+                resultMessage: "Aplikacja restartuje się."
+              });
+              window.setTimeout(() => window.location.reload(), 250);
+              return;
+            default:
+              break;
+          }
+
+          await client.collection("device_commands").update(command.id, {
+            status: "done",
+            processedAt: new Date().toISOString(),
+            resultMessage: "Komenda wykonana."
+          });
+        } catch (error) {
+          await client.collection("device_commands").update(command.id, {
+            status: "failed",
+            processedAt: new Date().toISOString(),
+            resultMessage: readError(error, "Urządzenie nie wykonało polecenia.")
+          });
+        }
+      }
+
+      await syncRef.current();
+    };
+
+    void process();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, commandSignature, currentItem, displayMode, nowLabel, playbackUnlocked, syncState.pendingCommands, syncState.screen]);
+
+  useEffect(() => {
+    if (!syncState.screen || !client.authStore.isValid) {
+      return;
+    }
+
+    const screen = syncState.screen;
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) {
+        void captureSnapshot(client, screen, {
+          currentItem,
+          displayMode,
+          imageElement: imageRef.current,
+          nowLabel,
+          playbackUnlocked,
+          videoElement: videoRef.current
+        }).catch(() => {
+          // Best effort only.
+        });
+      }
+    }, currentItem ? 3500 : 1200);
+
+    const interval = window.setInterval(() => {
+      void captureSnapshot(client, screen, {
+        currentItem,
+        displayMode,
+        imageElement: imageRef.current,
+        nowLabel,
+        playbackUnlocked,
+        videoElement: videoRef.current
+      }).catch(() => {
+        // ignore
+      });
+    }, 180000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [client, currentItem, displayMode, nowLabel, playbackUnlocked, syncState.screen]);
 
   useEffect(() => {
     return () => {
@@ -232,38 +488,96 @@ function App() {
   async function handleConnect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const nextClient = createPocketBaseClient(draftSettings.pocketbaseUrl.trim());
+    const nextClient = createPocketBaseClient(draftSettings.pocketbaseUrl.trim() || defaultPocketBaseUrl);
 
-    try {
-      await nextClient.collection("screen_users").authWithPassword(
-        draftSettings.email.trim(),
-        draftSettings.password
-      );
+    if (draftSettings.email.trim() && draftSettings.password) {
+      try {
+        await nextClient.collection("screen_users").authWithPassword(
+          draftSettings.email.trim(),
+          draftSettings.password
+        );
 
-      saveSettings(draftSettings);
-      setSettings(draftSettings);
-      setClient(nextClient);
-      setShowConfig(false);
-      setPlaybackUnlocked(false);
-      setCurrentIndex(0);
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Player został połączony z PocketBase."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zalogować kontem screen_users.")
-      });
+        clearPairingSession();
+        setPairingSession(null);
+        setPairingRecord(null);
+        saveSettings(draftSettings);
+        setSettings(draftSettings);
+        setClient(nextClient);
+        setShowConfig(false);
+        setPlaybackUnlocked(false);
+        setCurrentIndex(0);
+        showFlash(setFlash, {
+          kind: "success",
+          text: "Player został połączony z PocketBase."
+        });
+      } catch (error) {
+        showFlash(setFlash, {
+          kind: "error",
+          text: readError(error, "Nie udało się zalogować kontem screen_users.")
+        });
+      }
+
+      return;
     }
+
+    const nextSettings = {
+      pocketbaseUrl: draftSettings.pocketbaseUrl.trim() || defaultPocketBaseUrl,
+      email: "",
+      password: ""
+    };
+
+    nextClient.authStore.clear();
+    clearPairingSession();
+    setPairingSession(null);
+    setPairingRecord(null);
+    saveSettings(nextSettings);
+    setSettings(nextSettings);
+    setDraftSettings(nextSettings);
+    setClient(nextClient);
+    setShowConfig(false);
+    showFlash(setFlash, {
+      kind: "success",
+      text: "Adres PocketBase zapisany. Player wygeneruje nowy kod parowania."
+    });
   }
 
   function handleLogout() {
     client.authStore.clear();
+    clearPairingSession();
+    const resetSettings = {
+      pocketbaseUrl: settings.pocketbaseUrl,
+      email: "",
+      password: ""
+    };
+
+    saveSettings(resetSettings);
+    setSettings(resetSettings);
+    setDraftSettings(resetSettings);
+    setPairingSession(null);
+    setPairingRecord(null);
     setSyncState(emptySyncState);
     setPlaybackUnlocked(false);
+    setDisplayMode("active");
     setIsConnected(false);
     setShowConfig(true);
+  }
+
+  async function regeneratePairingCode() {
+    clearPairingSession();
+    setPairingSession(null);
+    setPairingRecord(null);
+    setSettings((current) => ({ ...current, email: "", password: "" }));
+    setDraftSettings((current) => ({ ...current, email: "", password: "" }));
+    saveSettings({
+      pocketbaseUrl: settings.pocketbaseUrl,
+      email: "",
+      password: ""
+    });
+    client.authStore.clear();
+    showFlash(setFlash, {
+      kind: "success",
+      text: "Stary kod został porzucony. Generuję nowy kod parowania."
+    });
   }
 
   async function unlockPlayback() {
@@ -287,6 +601,7 @@ function App() {
           className="player-media"
           src={currentItem.url}
           playsInline
+          crossOrigin="anonymous"
           autoPlay={playbackUnlocked}
           preload="auto"
           onEnded={() => moveNext(syncState.queue, setCurrentIndex)}
@@ -294,10 +609,16 @@ function App() {
       ) : null}
 
       {currentItem?.kind === "image" ? (
-        <img className="player-media image" src={currentItem.url} alt={currentItem.title} />
+        <img
+          ref={imageRef}
+          className="player-media image"
+          src={currentItem.url}
+          alt={currentItem.title}
+          crossOrigin="anonymous"
+        />
       ) : null}
 
-      {!currentItem ? (
+      {!currentItem && client.authStore.isValid ? (
         <div className="standby-overlay">
           <span className="eyebrow">Signal Deck Player</span>
           <h1>Brak aktywnej playlisty na ten moment.</h1>
@@ -311,10 +632,16 @@ function App() {
       <div className="glass-topbar">
         <div className="status-column">
           <span className="eyebrow">player</span>
-          <strong>{syncState.screen?.locationLabel || syncState.screen?.name || "niepołączony ekran"}</strong>
+          <strong>
+            {syncState.screen?.locationLabel ||
+              syncState.screen?.name ||
+              pairingRecord?.deviceName ||
+              "niepołączony ekran"}
+          </strong>
           <small>
-            {syncState.screen?.expand?.client?.name || "Brak klienta"} •{" "}
-            {syncState.screen?.expand?.channel?.name || "Brak kanału"}
+            {syncState.screen?.expand?.client?.name ||
+              (pairingRecord ? `kod ${pairingRecord.pairingCode}` : "Uruchom pairing")}{" "}
+            • {syncState.screen?.expand?.channel?.name || Capacitor.getPlatform()}
           </small>
         </div>
 
@@ -323,7 +650,7 @@ function App() {
             {showConfig ? "Ukryj panel" : "Konfiguracja"}
           </button>
           <button className="ghost-button danger" onClick={handleLogout} type="button">
-            Rozłącz
+            Reset / rozłącz
           </button>
         </div>
       </div>
@@ -335,6 +662,7 @@ function App() {
             {isConnected ? "connected" : "offline"}
           </span>
           <span className="chip">{syncing ? "syncing" : "ready"}</span>
+          {displayMode === "blackout" ? <span className="chip warning">blackout</span> : null}
         </div>
 
         <div className="meta-copy">
@@ -344,7 +672,9 @@ function App() {
               ? `Event: ${syncState.activeEvent.title}`
               : syncState.activeSchedule
                 ? `Schedule: ${syncState.activeSchedule.label}`
-                : "Standby"}
+                : pairingRecord
+                  ? "Czeka na sparowanie z CMS"
+                  : "Standby"}
           </span>
           <small>
             sync {formatDateTime(syncState.lastSyncAt)} • {nowLabel}
@@ -352,7 +682,43 @@ function App() {
         </div>
       </div>
 
-      {!playbackUnlocked && currentItem ? (
+      {!client.authStore.isValid ? (
+        <div className="pairing-overlay">
+          <div className="pairing-card">
+            <span className="eyebrow">android tv onboarding</span>
+            <h2>{pairingRecord?.pairingCode || "..."}</h2>
+            <p>
+              W CMS przejdź do sekcji <strong>Add New Device</strong> i wpisz ten kod. Po przypięciu
+              klienta i kanału player zaloguje się sam.
+            </p>
+            <div className="pairing-meta">
+              <span>APK</span>
+              <strong>{appVersion}</strong>
+              <small>{pairingRecord?.deviceName || getDeviceDescriptor()}</small>
+            </div>
+            <div className="pairing-actions">
+              <button className="ghost-button" onClick={() => void regeneratePairingCode()} type="button">
+                Wygeneruj nowy kod
+              </button>
+              <button className="ghost-button" onClick={() => setShowConfig(true)} type="button">
+                PocketBase URL
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {displayMode === "blackout" ? (
+        <div className="blackout-overlay">
+          <div className="blackout-card">
+            <span className="eyebrow">remote control</span>
+            <h2>Ekran został zdalnie wygaszony</h2>
+            <p>CMS ustawił tryb blackout. Po komendzie wake emisja wróci bez potrzeby ponownej konfiguracji.</p>
+          </div>
+        </div>
+      ) : null}
+
+      {!playbackUnlocked && currentItem && displayMode !== "blackout" ? (
         <div className="unlock-overlay">
           <div className="unlock-card">
             <span className="eyebrow">autoplay</span>
@@ -374,8 +740,8 @@ function App() {
             <span className="eyebrow">setup</span>
             <h2>Konfiguracja playera</h2>
             <p>
-              Wpisz dane konta z kolekcji <code>screen_users</code>. To konto tworzysz wcześniej w
-              CMS.
+              Wpisz tylko adres PocketBase, a player sam pokaże kod parowania. Pola email/hasło są
+              opcjonalne i służą głównie do ręcznego trybu serwisowego.
             </p>
 
             <label className="field">
@@ -395,7 +761,7 @@ function App() {
             </label>
 
             <label className="field">
-              <span>Email ekranu</span>
+              <span>Email ekranu (opcjonalnie)</span>
               <input
                 type="email"
                 value={draftSettings.email}
@@ -406,12 +772,11 @@ function App() {
                   }))
                 }
                 placeholder="tv-lobby-01@berry-secure.pl"
-                required
               />
             </label>
 
             <label className="field">
-              <span>Hasło</span>
+              <span>Hasło (opcjonalnie)</span>
               <input
                 type="password"
                 value={draftSettings.password}
@@ -422,20 +787,19 @@ function App() {
                   }))
                 }
                 placeholder="Hasło przypisane w CMS"
-                required
               />
             </label>
 
             <div className="config-info">
               <span>Aktualnie zapisane</span>
-              <strong>{settings.email || "brak"}</strong>
+              <strong>{settings.email || pairingRecord?.pairingCode || "tryb parowania"}</strong>
               <small>{settings.pocketbaseUrl || defaultPocketBaseUrl}</small>
             </div>
 
             {flash ? <div className={flash.kind === "success" ? "flash success" : "flash error"}>{flash.text}</div> : null}
 
             <button className="primary-button" type="submit">
-              Połącz i zapisz
+              Zapisz konfigurację
             </button>
           </form>
         </aside>
@@ -454,7 +818,7 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
     expand: "client,channel"
   });
 
-  const [fileToken, schedules, events, playlistItems] = await Promise.all([
+  const [fileToken, schedules, events, playlistItems, pendingCommands] = await Promise.all([
     client.files.getToken(),
     client.collection("schedule_rules").getFullList<ScheduleRuleRecord>({
       filter: `client="${screen.client}" && isActive=true`,
@@ -470,6 +834,10 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
       filter: `client="${screen.client}"`,
       sort: "playlist,sortOrder",
       expand: "playlist,mediaAsset"
+    }),
+    client.collection("device_commands").getFullList<DeviceCommandRecord>({
+      filter: `screen="${screen.id}" && status="queued"`,
+      sort: "created"
     })
   ]);
 
@@ -505,6 +873,7 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
     queue,
     activeSchedule,
     activeEvent,
+    pendingCommands,
     lastSyncAt: new Date().toISOString()
   };
 }
@@ -544,6 +913,227 @@ function buildQueue(
         queueKey: `${entry.queueKey}:${index}`
       }));
     });
+}
+
+async function ensurePairingSession(
+  client: ReturnType<typeof createPocketBaseClient>,
+  existing: PairingSession | null
+): Promise<{ session: PairingSession; record: DevicePairingRecord }> {
+  if (existing?.recordId) {
+    try {
+      const record = await refreshPairingRecord(client, existing);
+      if (record.status !== "claimed" && record.status !== "expired") {
+        return {
+          session: existing,
+          record
+        };
+      }
+    } catch {
+      // ignore and create a new session
+    }
+  }
+
+  const session: PairingSession = {
+    recordId: "",
+    installerId: crypto.randomUUID(),
+    pairingCode: generatePairingCode(),
+    createdAt: new Date().toISOString()
+  };
+
+  const record = await client.collection("device_pairings").create<DevicePairingRecord>({
+    installerId: session.installerId,
+    pairingCode: session.pairingCode,
+    status: "waiting",
+    deviceName: getDeviceDescriptor(),
+    platform: Capacitor.getPlatform(),
+    appVersion,
+    pairingExpiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+    lastSeenAt: new Date().toISOString()
+  });
+
+  return {
+    session: {
+      ...session,
+      recordId: record.id
+    },
+    record
+  };
+}
+
+async function refreshPairingRecord(
+  client: ReturnType<typeof createPocketBaseClient>,
+  session: PairingSession
+) {
+  await client.collection("device_pairings").update(session.recordId, {
+    lastSeenAt: new Date().toISOString(),
+    deviceName: getDeviceDescriptor(),
+    platform: Capacitor.getPlatform(),
+    appVersion
+  });
+
+  return client.collection("device_pairings").getOne<DevicePairingRecord>(session.recordId);
+}
+
+async function completePairingLogin(params: {
+  client: ReturnType<typeof createPocketBaseClient>;
+  record: DevicePairingRecord;
+  session: PairingSession;
+  settings: Settings;
+  setSettings: (value: Settings) => void;
+  setDraftSettings: (value: Settings) => void;
+  setPairingRecord: (value: DevicePairingRecord | null) => void;
+  setPairingSession: (value: PairingSession | null) => void;
+  setShowConfig: (value: boolean) => void;
+  setFlash: (value: { kind: "success" | "error"; text: string } | null) => void;
+  setPlaybackUnlocked: (value: boolean) => void;
+  setCurrentIndex: (value: number) => void;
+}) {
+  await params.client
+    .collection("screen_users")
+    .authWithPassword(params.record.assignedEmail, params.session.pairingCode);
+
+  let storedPassword = params.session.pairingCode;
+
+  try {
+    const rotatedPassword = generateSecret(24);
+    const authId = params.client.authStore.record?.id;
+    if (authId) {
+      await params.client.collection("screen_users").update(authId, {
+        oldPassword: params.session.pairingCode,
+        password: rotatedPassword,
+        passwordConfirm: rotatedPassword,
+        status: "online"
+      });
+      storedPassword = rotatedPassword;
+    }
+  } catch {
+    storedPassword = params.session.pairingCode;
+  }
+
+  const nextSettings = {
+    pocketbaseUrl: params.settings.pocketbaseUrl,
+    email: params.record.assignedEmail,
+    password: storedPassword
+  };
+
+  await params.client.collection("device_pairings").update(params.record.id, {
+    status: "claimed",
+    claimedAt: new Date().toISOString()
+  });
+
+  clearPairingSession();
+  saveSettings(nextSettings);
+  params.setSettings(nextSettings);
+  params.setDraftSettings(nextSettings);
+  params.setPairingRecord(null);
+  params.setPairingSession(null);
+  params.setShowConfig(false);
+  params.setPlaybackUnlocked(false);
+  params.setCurrentIndex(0);
+  showFlash(params.setFlash, {
+    kind: "success",
+    text: "Urządzenie zostało sparowane i zalogowane do playera."
+  });
+}
+
+async function captureSnapshot(
+  client: ReturnType<typeof createPocketBaseClient>,
+  screen: ScreenUserRecord,
+  snapshotState: {
+    currentItem: PlaybackEntry | null;
+    displayMode: "active" | "blackout";
+    imageElement: HTMLImageElement | null;
+    nowLabel: string;
+    playbackUnlocked: boolean;
+    videoElement: HTMLVideoElement | null;
+  }
+) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1280;
+  canvas.height = 720;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return;
+  }
+
+  const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+  gradient.addColorStop(0, "#171717");
+  gradient.addColorStop(1, "#0a0a0d");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  let mediaDrawn = false;
+
+  if (snapshotState.displayMode !== "blackout" && snapshotState.currentItem) {
+    try {
+      if (
+        snapshotState.currentItem.kind === "image" &&
+        snapshotState.imageElement?.complete &&
+        snapshotState.imageElement.naturalWidth > 0
+      ) {
+        context.drawImage(snapshotState.imageElement, 0, 0, canvas.width, canvas.height);
+        mediaDrawn = true;
+      }
+
+      if (
+        snapshotState.currentItem.kind === "video" &&
+        snapshotState.videoElement &&
+        snapshotState.videoElement.readyState >= 2
+      ) {
+        context.drawImage(snapshotState.videoElement, 0, 0, canvas.width, canvas.height);
+        mediaDrawn = true;
+      }
+    } catch {
+      mediaDrawn = false;
+    }
+  }
+
+  if (!mediaDrawn) {
+    context.fillStyle = snapshotState.displayMode === "blackout" ? "#050505" : "#101014";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#ffffff";
+    context.font = '700 54px "Arial"';
+    context.fillText(
+      snapshotState.displayMode === "blackout" ? "Blackout aktywny" : "Signal Deck Player",
+      80,
+      170
+    );
+    context.font = '500 30px "Arial"';
+    context.fillStyle = "rgba(255,255,255,0.7)";
+    context.fillText(
+      snapshotState.currentItem?.title || "Brak aktywnego materiału",
+      80,
+      230
+    );
+  }
+
+  context.fillStyle = "rgba(0,0,0,0.56)";
+  context.fillRect(0, canvas.height - 110, canvas.width, 110);
+  context.fillStyle = "#ffffff";
+  context.font = '700 28px "Arial"';
+  context.fillText(screen.locationLabel || screen.name, 50, canvas.height - 58);
+  context.font = '500 22px "Arial"';
+  context.fillStyle = "rgba(255,255,255,0.76)";
+  context.fillText(
+    `${snapshotState.currentItem?.playlistName || "Standby"} • ${snapshotState.nowLabel}`,
+    50,
+    canvas.height - 24
+  );
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((value) => resolve(value), "image/jpeg", 0.82);
+  });
+
+  const formData = new FormData();
+  if (blob) {
+    formData.append(
+      "lastScreenshot",
+      new File([blob], `snapshot-${screen.id}.jpg`, { type: "image/jpeg" })
+    );
+  }
+  formData.append("lastScreenshotAt", new Date().toISOString());
+  await client.collection("screen_users").update(screen.id, formData);
 }
 
 function eventMatches(event: EventRecord, screen: ScreenUserRecord) {
@@ -663,6 +1253,27 @@ function saveSettings(settings: Settings) {
   window.localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
 }
 
+function loadPairingSession() {
+  const raw = window.localStorage.getItem(pairingStorageKey);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as PairingSession;
+  } catch {
+    return null;
+  }
+}
+
+function savePairingSession(session: PairingSession) {
+  window.localStorage.setItem(pairingStorageKey, JSON.stringify(session));
+}
+
+function clearPairingSession() {
+  window.localStorage.removeItem(pairingStorageKey);
+}
+
 function showFlash(
   setter: (value: { kind: "success" | "error"; text: string } | null) => void,
   flash: { kind: "success" | "error"; text: string }
@@ -725,6 +1336,29 @@ function useNowLabel() {
     dateStyle: "medium",
     timeStyle: "medium"
   }).format(now);
+}
+
+function getDeviceDescriptor() {
+  if (typeof navigator === "undefined") {
+    return "Android TV";
+  }
+
+  const userAgent = navigator.userAgent || "";
+  if (userAgent.includes("Android")) {
+    return "Android TV";
+  }
+
+  return userAgent.slice(0, 80) || "Signal Deck Player";
+}
+
+function generatePairingCode() {
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+}
+
+function generateSecret(length: number) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%";
+  return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
 export default App;

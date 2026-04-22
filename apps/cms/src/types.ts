@@ -40,14 +40,63 @@ export interface ScreenUserRecord extends BaseRecord {
   client: string;
   channel: string;
   locationLabel: string;
-  status: "online" | "offline" | "maintenance";
+  status: "pairing" | "online" | "offline" | "maintenance";
   volumePercent: number;
   lastSeenAt: string;
   lastPlaybackAt: string;
   notes: string;
+  desiredDisplayState: "active" | "blackout";
+  deviceModel: string;
+  appVersion: string;
+  lastScreenshot: string;
+  lastScreenshotAt: string;
+  lastIpAddress: string;
+  networkMode: "dhcp" | "manual";
+  networkAddress: string;
+  networkGateway: string;
+  networkDns: string;
+  wifiSsid: string;
+  networkNotes: string;
   expand?: {
     client?: ClientRecord;
     channel?: ChannelRecord;
+  };
+}
+
+export interface DevicePairingRecord extends BaseRecord {
+  installerId: string;
+  pairingCode: string;
+  status: "waiting" | "paired" | "claimed" | "expired";
+  deviceName: string;
+  platform: string;
+  appVersion: string;
+  pairingExpiresAt: string;
+  lastSeenAt: string;
+  client: string;
+  channel: string;
+  locationLabel: string;
+  screen: string;
+  assignedEmail: string;
+  claimedAt: string;
+  expand?: {
+    client?: ClientRecord;
+    channel?: ChannelRecord;
+    screen?: ScreenUserRecord;
+  };
+}
+
+export interface DeviceCommandRecord extends BaseRecord {
+  screen: string;
+  commandType: "sync" | "capture_screenshot" | "blackout" | "wake" | "restart_app";
+  payload: string;
+  status: "queued" | "processing" | "done" | "failed";
+  resultMessage: string;
+  processedAt: string;
+  expiresAt: string;
+  issuedBy: string;
+  expand?: {
+    screen?: ScreenUserRecord;
+    issuedBy?: CmsUserRecord;
   };
 }
 
@@ -131,7 +180,10 @@ export interface EventRecord extends BaseRecord {
 export interface DashboardData {
   clients: ClientRecord[];
   channels: ChannelRecord[];
+  cmsUsers: CmsUserRecord[];
   screens: ScreenUserRecord[];
+  devicePairings: DevicePairingRecord[];
+  deviceCommands: DeviceCommandRecord[];
   mediaAssets: MediaAssetRecord[];
   playlists: PlaylistRecord[];
   playlistItems: PlaylistItemRecord[];

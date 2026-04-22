@@ -10,6 +10,9 @@
     "build:cms": "npm run build --workspace @ds/cms",
     "dev:player": "npm run dev --workspace @ds/player",
     "build:player": "npm run build --workspace @ds/player",
+    "build:android:debug": "npm run android:build:debug --workspace @ds/player",
+    "build:android:release": "npm run android:build:release --workspace @ds/player",
+    "publish:apk": "node scripts/publish-apk.mjs",
     "build": "npm run build:cms && npm run build:player",
     "pocketbase:setup": "node scripts/setup-pocketbase.mjs"
   }

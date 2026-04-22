@@ -38,6 +38,8 @@ Po tym kroku będziesz mieć gotowe kolekcje:
 - `channels`
 - `cms_users`
 - `screen_users`
+- `device_pairings`
+- `device_commands`
 - `media_assets`
 - `playlists`
 - `playlist_items`
@@ -75,31 +77,61 @@ Kolejność pracy w panelu:
 
 1. Dodaj klienta.
 2. Dodaj kanał dla klienta.
-3. Dodaj media.
-4. Dodaj playlistę.
-5. Dodaj elementy do playlisty.
-6. Dodaj regułę harmonogramu.
-7. Dodaj ekran w sekcji `Ekrany`.
+3. Dodaj konto operatora w sekcji `Użytkownicy`, jeśli potrzebujesz dodatkowych loginów.
+4. Dodaj media.
+5. Dodaj playlistę.
+6. Dodaj elementy do playlisty.
+7. Dodaj regułę harmonogramu.
+8. Zainstaluj playera na Android TV.
+9. W sekcji `Urządzenia > Add New Device` wpisz kod pokazany przez TV.
 
-Przy tworzeniu ekranu CMS zapisze konto w kolekcji `screen_users`.
-Te dane wpisujesz później do aplikacji player.
+Po sparowaniu CMS utworzy rekord w `screen_users`, a player zaloguje się już sam.
 
 ## 4. Build `.apk`
 
 Player siedzi w `apps/player`.
 
-Przygotowanie:
+Najpierw potrzebujesz działającej Javy i Android SDK.
+Jeśli ich nie masz, sam projekt Android jest już gotowy, ale finalny `.apk` nie zbuduje się lokalnie.
+
+Przygotowanie projektu:
 
 ```bash
 cd /Users/przeczacyklif/Movies/digital-signage/apps/player
 npm install
 npm run build
-npm run cap:add:android
 npm run cap:sync
+```
+
+Jeśli katalog `android/` dopiero powstaje, jednorazowo uruchom:
+
+```bash
+npm run cap:add:android
+```
+
+Potem możesz:
+
+```bash
 npm run android:open
 ```
 
-To otworzy projekt w Android Studio.
+albo bez Android Studio:
+
+```bash
+cd /Users/przeczacyklif/Movies/digital-signage
+npm run build:android:debug
+```
+
+Po buildzie opublikuj plik dokładnie tam, skąd CMS go linkuje:
+
+```bash
+cd /Users/przeczacyklif/Movies/digital-signage
+npm run publish:apk
+```
+
+To skopiuje gotowy build do:
+
+- `apps/cms/public/app/maasck.apk`
 
 Potem:
 
@@ -108,14 +140,20 @@ Potem:
 3. Zrób test przez `Run`.
 4. Dla gotowego `.apk` wybierz `Build > Build APK(s)`.
 5. Dla wersji produkcyjnej podpisz release key i zbuduj release build.
+6. Po każdym nowym buildzie znowu uruchom `npm run publish:apk`.
 
 ## 5. Pierwsze uruchomienie playera
 
-Na ekranie konfiguracji wpisujesz:
+Na ekranie konfiguracji wpisujesz tylko:
 
 - PocketBase URL: `https://pb.berry-secure.pl`
-- Email ekranu: z `screen_users`
-- Hasło ekranu: z `screen_users`
+
+Potem player:
+
+- generuje kod parowania
+- czeka, aż wpiszesz ten kod w CMS
+- po sparowaniu sam loguje się do `screen_users`
+- zaczyna wysyłać heartbeat, screenshoty i odbierać komendy
 
 Po pierwszym zalogowaniu player pobiera:
 
@@ -123,6 +161,19 @@ Po pierwszym zalogowaniu player pobiera:
 - schedule
 - eventy override
 - playlistę i media
+
+W CMS znajdziesz też:
+
+- status online/offline urządzeń
+- ostatni screenshot
+- zdalny `sync`
+- zdalny `blackout/wake`
+- formularz profilu sieciowego urządzenia
+
+Ważne:
+
+- `blackout` to aplikacyjne wygaszenie ekranu, nie zawsze fizyczne wyłączenie panelu TV
+- pola sieciowe w CMS są bezpiecznym profilem operacyjnym; na stock Android TV bez MDM / device owner nie da się ich zwykle zastosować całkiem bezdotykowo
 
 ## 6. Ważna uwaga o autoplay z dźwiękiem
 

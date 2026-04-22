@@ -60,16 +60,22 @@ npm run dev:player
 ## Najważniejsze założenia
 
 - CMS loguje się przez kolekcję `cms_users`
-- player loguje się przez kolekcję `screen_users`
+- player po instalacji pokazuje kod parowania i dopiero potem loguje się do kolekcji `screen_users`
+- CMS ma moduł zarządzania użytkownikami, parowania urządzeń, screenshotów i zdalnych komend
 - scheduling i eventy wybierają playlistę na podstawie kanału, daty, godzin i priorytetu
 - pliki media są chronione file tokenem PocketBase
 - pierwszy start odtwarzania w playerze wymaga jednego kliknięcia, żeby Android/WebView pozwolił grać wideo z dźwiękiem
+- polecenie "wyłącz ekran" działa jako aplikacyjny blackout; na stock Android TV nie jest to twarde odcięcie zasilania matrycy
+- pola sieciowe w CMS działają jako profil operacyjny; bez uprawnień MDM / device owner aplikacja nie zmieni tych ustawień po cichu
 
 ## Co dalej po setupie
 
 1. Wejdź na `https://cms.berry-secure.pl`
 2. Zaloguj się kontem `owner@berry-secure.pl` albo tym, które podałeś w setupie
-3. Dodaj klienta, kanał, media, playlistę, regułę schedule i konto ekranu
-4. W playerze wpisz dane konta ekranu z `screen_users`
+3. Dodaj klienta, kanał, użytkownika CMS i media
+4. Zbuduj lub opublikuj APK playera
+5. Zainstaluj APK na Android TV i odczytaj kod parowania
+6. W CMS przejdź do `Urządzenia > Add New Device`, wpisz kod i przypnij klienta oraz kanał
+7. Player zaloguje się sam, zacznie wysyłać heartbeat i screenshoty
 
 Szczegóły wdrożenia są w [docs/deployment.md](/Users/przeczacyklif/Movies/digital-signage/docs/deployment.md).

@@ -195,7 +195,9 @@ code {
 }
 
 .unlock-overlay,
-.config-drawer {
+.config-drawer,
+.pairing-overlay,
+.blackout-overlay {
   position: fixed;
   inset: 0;
   display: grid;
@@ -208,8 +210,16 @@ code {
   pointer-events: auto;
 }
 
+.pairing-overlay,
+.blackout-overlay {
+  background: rgba(3, 3, 4, 0.52);
+  pointer-events: auto;
+}
+
 .unlock-card,
-.standby-overlay {
+.standby-overlay,
+.pairing-card,
+.blackout-card {
   width: min(92vw, 520px);
   border-radius: 28px;
   padding: 1.7rem;
@@ -271,6 +281,57 @@ code {
   color: var(--muted);
 }
 
+.pairing-card {
+  pointer-events: auto;
+  text-align: center;
+  display: grid;
+  gap: 1rem;
+  background:
+    radial-gradient(circle at top, rgba(255, 106, 60, 0.18), transparent 38%),
+    rgba(9, 9, 12, 0.86);
+}
+
+.pairing-card h2,
+.blackout-card h2 {
+  margin: 0;
+  font-family: "Archivo", sans-serif;
+}
+
+.pairing-card h2 {
+  font-size: clamp(2.8rem, 9vw, 5.4rem);
+  letter-spacing: 0.12em;
+}
+
+.pairing-card p,
+.blackout-card p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.pairing-meta {
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  display: grid;
+  gap: 0.08rem;
+}
+
+.pairing-meta small {
+  color: var(--muted);
+}
+
+.pairing-actions {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.blackout-card {
+  pointer-events: auto;
+  text-align: center;
+}
+
 .flash {
   border-radius: 16px;
   padding: 0.9rem 1rem;
@@ -312,6 +373,10 @@ code {
 
   .config-drawer {
     justify-items: stretch;
+  }
+
+  .pairing-actions {
+    justify-content: stretch;
   }
 }
 
