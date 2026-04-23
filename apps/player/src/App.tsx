@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DeviceIdentity, MediaKind, PlaybackEntry, PlayerState, SessionResponse } from "./types";
 
 const identityStorageKey = "signal-deck-device-v1";
-const appVersion = "1.0.0";
+const appVersion = "1.0.1";
 const apiBaseUrl = (
   import.meta.env.DEV
     ? "http://localhost:3000"
@@ -35,6 +35,7 @@ function App() {
   const queueSignature = useMemo(() => queue.map((item) => item.id).join("|"), [queue]);
   const deviceTitle = device?.name || "Android TV";
   const playbackLabel = session?.playback.label || "";
+  const showHud = !(phase === "playing" && currentItem && device?.desiredDisplayState !== "blackout");
 
   useEffect(() => {
     heartbeatRef.current = {
@@ -263,23 +264,25 @@ function App() {
 
   return (
     <div className={`player-shell ${device?.desiredDisplayState === "blackout" ? "blackout" : ""}`}>
-      <header className="hud top">
-        <div className="identity-block">
-          <span className="eyebrow">Player</span>
-          <strong>{deviceTitle}</strong>
-          <small>
-            ID {identity.serial} · {device?.platform || safePlatform()} · APK {appVersion}
-          </small>
-        </div>
-        <div className="hud-actions">
-          <span className={`badge ${lastError ? "error" : device?.online || phase !== "error" ? "online" : "idle"}`}>
-            {lastError ? "problem" : phase}
-          </span>
-          <button className="ghost-button" type="button" onClick={() => void resetApproval()} disabled={busy}>
-            Reset / rozłącz
-          </button>
-        </div>
-      </header>
+      {showHud ? (
+        <header className="hud top">
+          <div className="identity-block">
+            <span className="eyebrow">Player</span>
+            <strong>{deviceTitle}</strong>
+            <small>
+              ID {identity.serial} · {device?.platform || safePlatform()} · APK {appVersion}
+            </small>
+          </div>
+          <div className="hud-actions">
+            <span className={`badge ${lastError ? "error" : device?.online || phase !== "error" ? "online" : "idle"}`}>
+              {lastError ? "problem" : phase}
+            </span>
+            <button className="ghost-button" type="button" onClick={() => void resetApproval()} disabled={busy}>
+              Reset / rozłącz
+            </button>
+          </div>
+        </header>
+      ) : null}
 
       {phase === "playing" && currentItem && device?.desiredDisplayState !== "blackout" ? (
         <main className="media-stage">
@@ -317,21 +320,23 @@ function App() {
         idleScreen
       )}
 
-      <footer className="hud bottom">
-        <div className="status-block">
-          <strong>{phase === "playing" ? playbackLabel || currentItem?.title || "Emisja" : statusMessage}</strong>
-          <small>
-            {phase === "playing"
-              ? session?.playback.reason || "Player emituje treść z serwera."
-              : lastError || statusMessage}
-          </small>
-        </div>
-        <div className="status-meta">
-          <span>{device?.clientName || "bez klienta"}</span>
-          <span>{device?.channelName || "bez kanału"}</span>
-          <span>{lastSyncAt ? `sync ${formatTime(lastSyncAt)}` : "sync brak"}</span>
-        </div>
-      </footer>
+      {showHud ? (
+        <footer className="hud bottom">
+          <div className="status-block">
+            <strong>{phase === "playing" ? playbackLabel || currentItem?.title || "Emisja" : statusMessage}</strong>
+            <small>
+              {phase === "playing"
+                ? session?.playback.reason || "Player emituje treść z serwera."
+                : lastError || statusMessage}
+            </small>
+          </div>
+          <div className="status-meta">
+            <span>{device?.clientName || "bez klienta"}</span>
+            <span>{device?.channelName || "bez kanału"}</span>
+            <span>{lastSyncAt ? `sync ${formatTime(lastSyncAt)}` : "sync brak"}</span>
+          </div>
+        </footer>
+      ) : null}
     </div>
   );
 }
