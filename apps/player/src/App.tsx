@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.6";
+const appVersion = "0.3.7";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -373,8 +373,15 @@ function App() {
           return;
         }
 
-        setSyncState(nextState);
-        setDisplayMode(nextState.screen?.desiredDisplayState || "active");
+        const onlineScreen = nextState.screen
+          ? await markScreenOnline(client, nextState.screen)
+          : null;
+        setSyncState({
+          ...nextState,
+          screen: onlineScreen || nextState.screen
+        });
+        setPairingRecord(null);
+        setDisplayMode((onlineScreen || nextState.screen)?.desiredDisplayState || "active");
         setIsConnected(true);
         setBootstrapState({
           phase: "online",
@@ -799,7 +806,7 @@ function App() {
           </strong>
           <small>
             {syncState.screen?.expand?.client?.name ||
-              (pairingRecord ? `ID ${pairingRecord.pairingCode}` : "Urządzenie oczekujące")}{" "}
+              (!isAuthenticated && pairingRecord ? `ID ${pairingRecord.pairingCode}` : "Urządzenie aktywne")}{" "}
             • {syncState.screen?.expand?.channel?.name || Capacitor.getPlatform()}
           </small>
         </div>
@@ -831,9 +838,13 @@ function App() {
               ? `Event: ${syncState.activeEvent.title}`
               : syncState.activeSchedule
                 ? `Schedule: ${syncState.activeSchedule.label}`
-                : pairingRecord
-                  ? "Czeka na zatwierdzenie w CMS"
-                  : "Standby"}
+                : currentItem
+                  ? `Playlista: ${currentItem.label}`
+                  : isAuthenticated
+                    ? "Player jest online, ale nie ma aktywnej emisji w harmonogramie."
+                    : pairingRecord
+                      ? "Czeka na zatwierdzenie w CMS"
+                      : "Standby"}
           </span>
           <small>
             sync {formatDateTime(syncState.lastSyncAt)} • {nowLabel}
@@ -1074,19 +1085,27 @@ async function syncPlayer(client: ReturnType<typeof createPocketBaseClient>): Pr
       .sort((left, right) => right.priority - left.priority)[0] || null;
 
   const activePlaylistId = activeEvent?.playlist || activeSchedule?.playlist || "";
+  const fallbackPlaylist =
+    !activeEvent && !activeSchedule
+      ? [...playlists]
+          .filter((playlist) => playlist.isActive && (!playlist.channel || playlist.channel === screen.channel))
+          .sort((left, right) => compareText(left.name, right.name))[0] || null
+      : null;
+  const resolvedPlaylistId = activePlaylistId || fallbackPlaylist?.id || "";
   const activePlaylistName =
     activeEvent?.expand?.playlist?.name ||
     activeSchedule?.expand?.playlist?.name ||
+    fallbackPlaylist?.name ||
     "Brak playlisty";
 
-  const queue = activePlaylistId
+  const queue = resolvedPlaylistId
     ? buildQueue(
-        hydrated.playlistItems.filter((item) => item.playlist === activePlaylistId),
+        hydrated.playlistItems.filter((item) => item.playlist === resolvedPlaylistId),
         client,
         fileToken,
-        activePlaylistId,
+        resolvedPlaylistId,
         activePlaylistName,
-        activeEvent?.title || activeSchedule?.label || activePlaylistName
+        activeEvent?.title || activeSchedule?.label || `Fallback: ${activePlaylistName}`
       )
     : [];
 
@@ -1327,8 +1346,14 @@ async function completePairingLogin(params: {
   ]);
 
   const nextState = await syncPlayer(params.client);
-  params.setSyncState(nextState);
-  params.setDisplayMode(nextState.screen?.desiredDisplayState || "active");
+  const onlineScreen = nextState.screen
+    ? await markScreenOnline(params.client, nextState.screen)
+    : null;
+  params.setSyncState({
+    ...nextState,
+    screen: onlineScreen || nextState.screen
+  });
+  params.setDisplayMode((onlineScreen || nextState.screen)?.desiredDisplayState || "active");
   params.setPairingRecord(null);
   params.setPairingSession(nextSession);
   params.setBootstrapState({
@@ -1577,6 +1602,22 @@ function loadPairingSession() {
 
 function savePairingSession(session: PairingSession) {
   window.localStorage.setItem(pairingStorageKey, JSON.stringify(session));
+}
+
+async function markScreenOnline(
+  client: ReturnType<typeof createPocketBaseClient>,
+  screen: ScreenUserRecord
+) {
+  try {
+    return await client.collection("screen_users").update<ScreenUserRecord>(screen.id, {
+      status: screen.status === "maintenance" ? "maintenance" : "online",
+      lastSeenAt: new Date().toISOString(),
+      deviceModel: getDeviceDescriptor(),
+      appVersion
+    });
+  } catch {
+    return screen;
+  }
 }
 
 function formatBootstrapPhase(phase: BootstrapState["phase"]) {

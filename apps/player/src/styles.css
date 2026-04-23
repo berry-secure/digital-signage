@@ -89,7 +89,7 @@ code {
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
-  padding: 0.9rem 1rem;
+  padding: 0.72rem 0.9rem;
   border-radius: 22px;
   background: var(--glass);
 }
@@ -102,7 +102,7 @@ code {
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
-  padding: 0.95rem 1rem;
+  padding: 0.72rem 0.9rem;
   border-radius: 22px;
   background: var(--glass);
 }
@@ -217,6 +217,9 @@ code {
   background: rgba(3, 3, 4, 0.52);
   pointer-events: auto;
   z-index: 4;
+  padding: 6.2rem 1rem 7.2rem;
+  align-content: center;
+  overflow: auto;
 }
 
 .unlock-card,
@@ -236,6 +239,8 @@ code {
 .config-drawer {
   justify-items: end;
   padding: 1rem;
+  z-index: 8;
+  background: rgba(3, 3, 4, 0.38);
 }
 
 .config-card {
@@ -243,7 +248,7 @@ code {
   width: min(100%, 420px);
   border-radius: 28px;
   padding: 1.4rem;
-  background: rgba(9, 9, 12, 0.82);
+  background: rgba(9, 9, 12, 0.96);
   display: grid;
   gap: 1rem;
 }
@@ -289,6 +294,7 @@ code {
   text-align: center;
   display: grid;
   gap: 1rem;
+  max-height: min(100%, 720px);
   background:
     radial-gradient(circle at top, rgba(255, 106, 60, 0.18), transparent 38%),
     rgba(9, 9, 12, 0.86);
@@ -396,5 +402,10 @@ code {
     left: 0.7rem;
     right: 0.7rem;
     width: auto;
+  }
+
+  .pairing-overlay,
+  .blackout-overlay {
+    padding: 5.4rem 0.7rem 6.2rem;
   }
 }
