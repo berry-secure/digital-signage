@@ -17,7 +17,7 @@ import type {
 
 const settingsStorageKey = "signal-deck-player-settings";
 const pairingStorageKey = "signal-deck-player-pairing";
-const appVersion = "0.3.5";
+const appVersion = "0.3.6";
 
 type Settings = {
   pocketbaseUrl: string;
@@ -1147,6 +1147,7 @@ async function ensurePairingSession(
       return {
         session: {
           ...existing,
+          installerId: record.installerId || existing.installerId,
           pairingCode: record.pairingCode || existing.pairingCode
         },
         record
@@ -1175,6 +1176,7 @@ async function ensurePairingSession(
         session: {
           ...existing,
           recordId: refreshed.id,
+          installerId: refreshed.installerId || existing.installerId,
           pairingCode: refreshed.pairingCode || existing.pairingCode
         },
         record: refreshed
@@ -1249,9 +1251,10 @@ async function completePairingLogin(params: {
   setSyncing: (value: boolean) => void;
   setBootstrapState: (value: BootstrapState) => void;
 }) {
+  const resolvedInstallerId = params.record.installerId || params.session.installerId;
   params.setBootstrapState({
     phase: "authenticating",
-    detail: `Logowanie kontem ${params.record.assignedEmail}.`
+    detail: `Logowanie kontem ${params.record.assignedEmail} przy użyciu identyfikatora instalacji.`
   });
   let resolvedPassword = params.session.installerId;
   let authRecordId = "";
@@ -1261,8 +1264,9 @@ async function completePairingLogin(params: {
       params.client,
       params.settings.pocketbaseUrl || defaultPocketBaseUrl,
       params.record.assignedEmail,
-      params.session.installerId
+      resolvedInstallerId
     );
+    resolvedPassword = resolvedInstallerId;
     authRecordId = authResponse.record.id;
   } catch (primaryError) {
     try {
@@ -1289,6 +1293,7 @@ async function completePairingLogin(params: {
   const nextSession = {
     ...params.session,
     recordId: params.record.id,
+    installerId: resolvedInstallerId,
     pairingCode: params.record.pairingCode || params.session.pairingCode
   };
   savePairingSession(nextSession);
