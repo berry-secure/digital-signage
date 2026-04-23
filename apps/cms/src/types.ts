@@ -1,148 +1,82 @@
-export interface BaseRecord {
+export type UserRole = "owner" | "manager" | "editor";
+export type DeviceApprovalStatus = "pending" | "approved";
+export type DeviceDisplayState = "active" | "blackout";
+export type DevicePlayerState = "waiting" | "idle" | "playing";
+export type MediaKind = "video" | "image";
+
+export interface UserRecord {
   id: string;
-  collectionId: string;
-  collectionName: string;
-  created: string;
-  updated: string;
-  expand?: Record<string, unknown>;
+  email: string;
+  name: string;
+  role: UserRole;
 }
 
-export interface ClientRecord extends BaseRecord {
+export interface ClientRecord {
+  id: string;
   name: string;
   slug: string;
   brandColor: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface ChannelRecord extends BaseRecord {
-  client: string;
+export interface ChannelRecord {
+  id: string;
+  clientId: string;
   name: string;
   slug: string;
   description: string;
   orientation: "landscape" | "portrait";
-  expand?: {
-    client?: ClientRecord;
-  };
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface CmsUserRecord extends BaseRecord {
-  email: string;
-  name: string;
-  role: "owner" | "manager" | "editor";
-  client: string;
-  expand?: {
-    client?: ClientRecord;
-  };
-}
-
-export interface ScreenUserRecord extends BaseRecord {
-  email: string;
-  name: string;
-  client: string;
-  channel: string;
-  locationLabel: string;
-  status: "pairing" | "online" | "offline" | "maintenance";
-  volumePercent: number;
-  lastSeenAt: string;
-  lastPlaybackAt: string;
-  notes: string;
-  desiredDisplayState: "active" | "blackout";
-  deviceModel: string;
-  appVersion: string;
-  lastScreenshot: string;
-  lastScreenshotAt: string;
-  lastIpAddress: string;
-  networkMode: "dhcp" | "manual";
-  networkAddress: string;
-  networkGateway: string;
-  networkDns: string;
-  wifiSsid: string;
-  networkNotes: string;
-  expand?: {
-    client?: ClientRecord;
-    channel?: ChannelRecord;
-  };
-}
-
-export interface DevicePairingRecord extends BaseRecord {
-  installerId: string;
-  pairingCode: string;
-  status: "waiting" | "paired" | "claimed" | "expired";
-  deviceName: string;
-  platform: string;
-  appVersion: string;
-  pairingExpiresAt: string;
-  lastSeenAt: string;
-  client: string;
-  channel: string;
-  locationLabel: string;
-  screen: string;
-  assignedEmail: string;
-  claimedAt: string;
-  expand?: {
-    client?: ClientRecord;
-    channel?: ChannelRecord;
-    screen?: ScreenUserRecord;
-  };
-}
-
-export interface DeviceCommandRecord extends BaseRecord {
-  screen: string;
-  commandType: "sync" | "capture_screenshot" | "blackout" | "wake" | "restart_app";
-  payload: string;
-  status: "queued" | "processing" | "done" | "failed";
-  resultMessage: string;
-  processedAt: string;
-  expiresAt: string;
-  issuedBy: string;
-  expand?: {
-    screen?: ScreenUserRecord;
-    issuedBy?: CmsUserRecord;
-  };
-}
-
-export interface MediaAssetRecord extends BaseRecord {
-  client: string;
+export interface MediaRecord {
+  id: string;
+  clientId: string;
   title: string;
-  kind: "video" | "image";
-  asset: string;
+  kind: MediaKind;
+  fileName: string;
+  originalName: string;
+  mimeType: string;
   durationSeconds: number;
   hasAudio: boolean;
   status: "draft" | "published";
   tags: string;
-  expand?: {
-    client?: ClientRecord;
-  };
+  url: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface PlaylistRecord extends BaseRecord {
-  client: string;
-  channel: string;
-  name: string;
-  isActive: boolean;
-  notes: string;
-  expand?: {
-    client?: ClientRecord;
-    channel?: ChannelRecord;
-  };
-}
-
-export interface PlaylistItemRecord extends BaseRecord {
-  client: string;
-  playlist: string;
-  mediaAsset: string;
+export interface PlaylistItemRecord {
+  id: string;
+  playlistId: string;
+  mediaId: string;
   sortOrder: number;
   loopCount: number;
   volumePercent: number;
-  expand?: {
-    playlist?: PlaylistRecord;
-    mediaAsset?: MediaAssetRecord;
-  };
+  createdAt: string;
+  updatedAt: string;
+  media: MediaRecord | null;
 }
 
-export interface ScheduleRuleRecord extends BaseRecord {
-  client: string;
-  channel: string;
-  playlist: string;
+export interface PlaylistRecord {
+  id: string;
+  clientId: string;
+  channelId: string;
+  name: string;
+  isActive: boolean;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+  items: PlaylistItemRecord[];
+}
+
+export interface ScheduleRecord {
+  id: string;
+  clientId: string;
+  channelId: string;
+  playlistId: string;
   label: string;
   startDate: string;
   endDate: string;
@@ -151,42 +85,51 @@ export interface ScheduleRuleRecord extends BaseRecord {
   daysOfWeek: string;
   priority: number;
   isActive: boolean;
-  expand?: {
-    client?: ClientRecord;
-    channel?: ChannelRecord;
-    playlist?: PlaylistRecord;
-  };
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface EventRecord extends BaseRecord {
-  client: string;
-  channel: string;
-  screen: string;
-  playlist: string;
-  title: string;
-  message: string;
-  startsAt: string;
-  endsAt: string;
-  priority: number;
-  isActive: boolean;
-  expand?: {
-    client?: ClientRecord;
-    channel?: ChannelRecord;
-    screen?: ScreenUserRecord;
-    playlist?: PlaylistRecord;
-  };
+export interface DeviceRecord {
+  id: string;
+  serial: string;
+  secret: string;
+  approvalStatus: DeviceApprovalStatus;
+  name: string;
+  clientId: string;
+  channelId: string;
+  locationLabel: string;
+  notes: string;
+  platform: string;
+  appVersion: string;
+  deviceModel: string;
+  desiredDisplayState: DeviceDisplayState;
+  volumePercent: number;
+  playerState: DevicePlayerState;
+  playerMessage: string;
+  activeItemTitle: string;
+  lastSeenAt: string;
+  lastSyncAt: string;
+  lastPlaybackAt: string;
+  createdAt: string;
+  updatedAt: string;
+  clientName: string;
+  channelName: string;
+  online: boolean;
 }
 
-export interface DashboardData {
+export interface InstallationInfo {
+  apiBaseUrl: string;
+  apkUrl: string;
+}
+
+export interface BootstrapPayload {
+  user: UserRecord;
+  users: UserRecord[];
+  installation: InstallationInfo;
   clients: ClientRecord[];
   channels: ChannelRecord[];
-  cmsUsers: CmsUserRecord[];
-  screens: ScreenUserRecord[];
-  devicePairings: DevicePairingRecord[];
-  deviceCommands: DeviceCommandRecord[];
-  mediaAssets: MediaAssetRecord[];
+  media: MediaRecord[];
   playlists: PlaylistRecord[];
-  playlistItems: PlaylistItemRecord[];
-  schedules: ScheduleRuleRecord[];
-  events: EventRecord[];
+  schedules: ScheduleRecord[];
+  devices: DeviceRecord[];
 }

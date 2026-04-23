@@ -1,1133 +1,577 @@
-import { type FormEvent, type ReactNode, useEffect, useId, useMemo, useState } from "react";
-import { createPocketBaseClient, pocketbaseUrl } from "./lib/pocketbase";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  ApiError,
+  approveDevice,
+  clearToken,
+  createChannel,
+  createClient,
+  createPlaylist,
+  createPlaylistItem,
+  createSchedule,
+  createUser,
+  deleteChannel,
+  deleteClient,
+  deleteDevice,
+  deleteMedia,
+  deletePlaylist,
+  deletePlaylistItem,
+  deleteSchedule,
+  deleteUser,
+  fetchBootstrap,
+  getApiBaseUrl,
+  getStoredToken,
+  login,
+  logout,
+  resetDevice,
+  storeToken,
+  updateChannel,
+  updateClient,
+  updateDevice,
+  updatePlaylist,
+  updateSchedule,
+  updateUser,
+  uploadMedia
+} from "./api";
 import type {
+  BootstrapPayload,
   ChannelRecord,
   ClientRecord,
-  CmsUserRecord,
-  DashboardData,
-  DeviceCommandRecord,
-  DevicePairingRecord,
-  EventRecord,
-  MediaAssetRecord,
-  PlaylistItemRecord,
+  DeviceRecord,
+  InstallationInfo,
+  MediaRecord,
   PlaylistRecord,
-  ScheduleRuleRecord,
-  ScreenUserRecord
+  ScheduleRecord,
+  UserRecord,
+  UserRole
 } from "./types";
 
-const pb = createPocketBaseClient();
+type SectionKey = "overview" | "users" | "clients" | "channels" | "media" | "playlists" | "schedule" | "devices" | "install";
+type FlashMessage = { kind: "success" | "error"; text: string };
 
-type SectionKey =
-  | "overview"
-  | "clients"
-  | "channels"
-  | "users"
-  | "screens"
-  | "media"
-  | "playlists"
-  | "schedule"
-  | "events"
-  | "app";
-
-type FlashMessage = {
-  kind: "success" | "error";
-  text: string;
+type UserFormState = {
+  id: string;
+  email: string;
+  password: string;
+  name: string;
+  role: UserRole;
 };
 
-const emptyDashboard: DashboardData = {
-  clients: [],
-  channels: [],
-  cmsUsers: [],
-  screens: [],
-  devicePairings: [],
-  deviceCommands: [],
-  mediaAssets: [],
-  playlists: [],
-  playlistItems: [],
-  schedules: [],
-  events: []
+type ClientFormState = {
+  id: string;
+  name: string;
+  slug: string;
+  brandColor: string;
+};
+
+type ChannelFormState = {
+  id: string;
+  clientId: string;
+  name: string;
+  slug: string;
+  description: string;
+  orientation: "landscape" | "portrait";
+};
+
+type MediaFormState = {
+  clientId: string;
+  title: string;
+  kind: "video" | "image";
+  durationSeconds: string;
+  hasAudio: boolean;
+  status: "draft" | "published";
+  tags: string;
+  file: File | null;
+};
+
+type PlaylistFormState = {
+  id: string;
+  clientId: string;
+  channelId: string;
+  name: string;
+  isActive: boolean;
+  notes: string;
+};
+
+type PlaylistItemFormState = {
+  playlistId: string;
+  mediaId: string;
+  sortOrder: string;
+  loopCount: string;
+  volumePercent: string;
+};
+
+type ScheduleFormState = {
+  id: string;
+  clientId: string;
+  channelId: string;
+  playlistId: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  startTime: string;
+  endTime: string;
+  daysOfWeek: string;
+  priority: string;
+  isActive: boolean;
+};
+
+type DeviceFormState = {
+  id: string;
+  serial: string;
+  name: string;
+  clientId: string;
+  channelId: string;
+  locationLabel: string;
+  notes: string;
+  desiredDisplayState: "active" | "blackout";
+  volumePercent: string;
 };
 
 const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
-  { key: "overview", label: "Overview", hint: "status i szybkie KPI" },
-  { key: "clients", label: "Klienci", hint: "tenanci i branding" },
-  { key: "channels", label: "Kanały", hint: "grupy ekranów" },
-  { key: "users", label: "Użytkownicy", hint: "konta do CMS" },
-  { key: "screens", label: "Urządzenia", hint: "oczekujące, aktywne, komendy" },
-  { key: "media", label: "Media", hint: "wideo i assety" },
-  { key: "playlists", label: "Playlisty", hint: "kolejność emisji" },
-  { key: "schedule", label: "Scheduling", hint: "czas emisji" },
-  { key: "events", label: "Eventy", hint: "awaryjne override" },
-  { key: "app", label: "Instalacja", hint: "APK i onboarding Android TV" }
+  { key: "overview", label: "Pulpit", hint: "status systemu" },
+  { key: "users", label: "Użytkownicy", hint: "konta CMS" },
+  { key: "clients", label: "Klienci", hint: "tenant i branding" },
+  { key: "channels", label: "Kanały", hint: "grupy emisji" },
+  { key: "media", label: "Media", hint: "video i obrazy" },
+  { key: "playlists", label: "Playlisty", hint: "kolejność materiałów" },
+  { key: "schedule", label: "Harmonogramy", hint: "emisja wg czasu" },
+  { key: "devices", label: "Urządzenia", hint: "seriale i approval" },
+  { key: "install", label: "Instalacja", hint: "APK i adres serwera" }
 ];
 
-const defaultClientForm = {
-  name: "",
-  slug: "",
-  brandColor: "#D46A3B"
+const emptyBootstrap: BootstrapPayload = {
+  user: { id: "", email: "", name: "", role: "owner" },
+  users: [],
+  installation: { apiBaseUrl: "", apkUrl: "" },
+  clients: [],
+  channels: [],
+  media: [],
+  playlists: [],
+  schedules: [],
+  devices: []
 };
 
-const defaultChannelForm = {
-  client: "",
+const emptyUserForm: UserFormState = {
+  id: "",
+  email: "",
+  password: "",
+  name: "",
+  role: "editor"
+};
+
+const emptyClientForm: ClientFormState = {
+  id: "",
+  name: "",
+  slug: "",
+  brandColor: "#ff6a3d"
+};
+
+const emptyChannelForm: ChannelFormState = {
+  id: "",
+  clientId: "",
   name: "",
   slug: "",
   description: "",
   orientation: "landscape"
 };
 
-const defaultCmsUserForm = {
-  email: "",
-  password: "",
-  name: "",
-  role: "manager",
-  client: ""
-};
-
-const defaultApprovalForm = {
-  pairingId: "",
-  name: "",
-  client: "",
-  channel: "",
-  locationLabel: "",
-  volumePercent: "80",
-  notes: ""
-};
-
-const defaultDeviceProfileForm = {
-  screen: "",
-  name: "",
-  client: "",
-  channel: "",
-  locationLabel: "",
-  volumePercent: "80",
-  desiredDisplayState: "active",
-  networkMode: "dhcp",
-  networkAddress: "",
-  networkGateway: "",
-  networkDns: "",
-  wifiSsid: "",
-  networkNotes: "",
-  notes: ""
-};
-
-const defaultMediaForm = {
-  client: "",
+const emptyMediaForm: MediaFormState = {
+  clientId: "",
   title: "",
   kind: "video",
-  durationSeconds: "0",
+  durationSeconds: "10",
   hasAudio: true,
   status: "published",
-  tags: ""
+  tags: "",
+  file: null
 };
 
-const defaultPlaylistForm = {
-  client: "",
-  channel: "",
+const emptyPlaylistForm: PlaylistFormState = {
+  id: "",
+  clientId: "",
+  channelId: "",
   name: "",
   isActive: true,
   notes: ""
 };
 
-const defaultPlaylistItemForm = {
-  playlist: "",
-  mediaAsset: "",
+const emptyPlaylistItemForm: PlaylistItemFormState = {
+  playlistId: "",
+  mediaId: "",
   sortOrder: "10",
   loopCount: "1",
   volumePercent: "100"
 };
 
-const defaultScheduleForm = {
-  client: "",
-  channel: "",
-  playlist: "",
+const emptyScheduleForm: ScheduleFormState = {
+  id: "",
+  clientId: "",
+  channelId: "",
+  playlistId: "",
   label: "",
   startDate: "",
   endDate: "",
   startTime: "08:00",
-  endTime: "22:00",
-  daysOfWeek: "1,2,3,4,5,6,0",
+  endTime: "18:00",
+  daysOfWeek: "1,2,3,4,5",
   priority: "100",
   isActive: true
 };
 
-const defaultEventForm = {
-  client: "",
-  channel: "",
-  screen: "",
-  playlist: "",
-  title: "",
-  message: "",
-  startsAt: "",
-  endsAt: "",
-  priority: "300",
-  isActive: true
+const emptyDeviceForm: DeviceFormState = {
+  id: "",
+  serial: "",
+  name: "",
+  clientId: "",
+  channelId: "",
+  locationLabel: "",
+  notes: "",
+  desiredDisplayState: "active",
+  volumePercent: "80"
 };
 
+const weekdayOptions = [
+  { value: 1, label: "Pon" },
+  { value: 2, label: "Wt" },
+  { value: 3, label: "Śr" },
+  { value: 4, label: "Czw" },
+  { value: 5, label: "Pt" },
+  { value: 6, label: "Sob" },
+  { value: 0, label: "Nd" }
+];
+
 function App() {
+  const [token, setToken] = useState(() => getStoredToken());
+  const [dashboard, setDashboard] = useState<BootstrapPayload>(emptyBootstrap);
+  const [loading, setLoading] = useState(Boolean(getStoredToken()));
+  const [submitting, setSubmitting] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>("overview");
-  const [authRecord, setAuthRecord] = useState<CmsUserRecord | null>(
-    (pb.authStore.record as CmsUserRecord | null) ?? null
-  );
-  const [isLoading, setIsLoading] = useState<boolean>(pb.authStore.isValid);
   const [flash, setFlash] = useState<FlashMessage | null>(null);
-  const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
-  const [fileToken, setFileToken] = useState<string>("");
-  const [apkAvailable, setApkAvailable] = useState<boolean | null>(null);
-  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
-  const [clientForm, setClientForm] = useState(defaultClientForm);
-  const [channelForm, setChannelForm] = useState(defaultChannelForm);
-  const [cmsUserForm, setCmsUserForm] = useState(defaultCmsUserForm);
-  const [approvalForm, setApprovalForm] = useState(defaultApprovalForm);
-  const [selectedScreenId, setSelectedScreenId] = useState<string>("");
-  const [deviceProfileForm, setDeviceProfileForm] = useState(defaultDeviceProfileForm);
-  const [mediaForm, setMediaForm] = useState(defaultMediaForm);
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [playlistForm, setPlaylistForm] = useState(defaultPlaylistForm);
-  const [playlistItemForm, setPlaylistItemForm] = useState(defaultPlaylistItemForm);
-  const [scheduleForm, setScheduleForm] = useState(defaultScheduleForm);
-  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
-  const [eventForm, setEventForm] = useState(defaultEventForm);
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(pb.authStore.isValid);
+  const [loginForm, setLoginForm] = useState({ email: "admin@berry-secure.pl", password: "berry-secure-admin" });
+  const [userForm, setUserForm] = useState<UserFormState>(emptyUserForm);
+  const [clientForm, setClientForm] = useState<ClientFormState>(emptyClientForm);
+  const [channelForm, setChannelForm] = useState<ChannelFormState>(emptyChannelForm);
+  const [mediaForm, setMediaForm] = useState<MediaFormState>(emptyMediaForm);
+  const [mediaInputKey, setMediaInputKey] = useState(0);
+  const [playlistForm, setPlaylistForm] = useState<PlaylistFormState>(emptyPlaylistForm);
+  const [playlistItemForm, setPlaylistItemForm] = useState<PlaylistItemFormState>(emptyPlaylistItemForm);
+  const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(emptyScheduleForm);
+  const [deviceForm, setDeviceForm] = useState<DeviceFormState>(emptyDeviceForm);
 
-  useEffect(() => {
-    return pb.authStore.onChange(() => {
-      setAuthRecord((pb.authStore.record as CmsUserRecord | null) ?? null);
-    });
-  }, []);
+  const clients = dashboard.clients;
+  const channels = dashboard.channels;
+  const media = dashboard.media;
+  const playlists = dashboard.playlists;
+  const schedules = dashboard.schedules;
+  const devices = dashboard.devices;
+  const pendingDevices = devices.filter((device) => device.approvalStatus === "pending");
+  const approvedDevices = devices.filter((device) => device.approvalStatus === "approved");
 
-  useEffect(() => {
-    if (!pb.authStore.isValid) {
-      setDashboard(emptyDashboard);
-      setFileToken("");
-      setHasLoadedOnce(false);
-      setIsLoading(false);
-      return;
-    }
+  const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
+  const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
+  const mediaLookup = useMemo(() => new Map(media.map((entry) => [entry.id, entry])), [media]);
 
-    let cancelled = false;
-    let poller = 0;
-
-    const load = async ({ silent = false }: { silent?: boolean } = {}) => {
-      if (!silent && !hasLoadedOnce) {
-        setIsLoading(true);
-      }
-
-      try {
-        const [
-          token,
-          clients,
-          channels,
-          cmsUsers,
-          screens,
-          devicePairings,
-          deviceCommands,
-          mediaAssets,
-          playlists,
-          playlistItems,
-          schedules,
-          events
-        ] = await Promise.all([
-          safeGetFileToken(),
-          safeGetFullList<ClientRecord>("clients", { sort: "name" }),
-          safeGetFullList<ChannelRecord>("channels", {
-            sort: "name"
-          }),
-          safeGetFullList<CmsUserRecord>("cms_users", {
-            sort: "name"
-          }),
-          safeGetFullList<ScreenUserRecord>("screen_users"),
-          safeGetFullList<DevicePairingRecord>("device_pairings"),
-          safeGetFullList<DeviceCommandRecord>("device_commands"),
-          safeGetFullList<MediaAssetRecord>("media_assets"),
-          safeGetFullList<PlaylistRecord>("playlists", {
-            sort: "name"
-          }),
-          safeGetFullList<PlaylistItemRecord>("playlist_items", {
-            sort: "playlist,sortOrder"
-          }),
-          safeGetFullList<ScheduleRuleRecord>("schedule_rules", {
-            sort: "-priority,label"
-          }),
-          safeGetFullList<EventRecord>("events", {
-            sort: "-priority,-startsAt"
-          })
-        ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        setFileToken(token);
-        setDashboard(
-          hydrateDashboardRelations(
-            scopeDashboard(
-              {
-                clients,
-                channels,
-                cmsUsers,
-                screens,
-                devicePairings,
-                deviceCommands,
-                mediaAssets,
-                playlists,
-                playlistItems,
-                schedules,
-                events
-              },
-              authRecord
-            )
-          )
-        );
-      } catch (error) {
-        showFlash(setFlash, {
-          kind: "error",
-          text: readError(error, "Nie udało się pobrać danych z PocketBase.")
-        });
-      } finally {
-        if (!cancelled) {
-          setHasLoadedOnce(true);
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void load();
-    poller = window.setInterval(() => {
-      void load({ silent: true });
-    }, 15000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(poller);
-    };
-  }, [authRecord?.id, authRecord?.client, authRecord?.role, hasLoadedOnce, refreshNonce]);
-
-  useEffect(() => {
-    if (!dashboard.screens.length) {
-      setSelectedScreenId("");
-      setDeviceProfileForm(defaultDeviceProfileForm);
-      return;
-    }
-
-    setSelectedScreenId((current) => {
-      if (current && dashboard.screens.some((screen) => screen.id === current)) {
-        return current;
-      }
-
-      return dashboard.screens[0].id;
-    });
-  }, [dashboard.screens]);
-
-  useEffect(() => {
-    const screen = dashboard.screens.find((entry) => entry.id === selectedScreenId);
-    if (!screen) {
-      return;
-    }
-
-    setDeviceProfileForm(toDeviceProfileForm(screen));
-  }, [selectedScreenId, dashboard.screens]);
-
-  useEffect(() => {
-    if (!approvalForm.pairingId) {
-      return;
-    }
-
-    if (!dashboard.devicePairings.some((entry) => entry.id === approvalForm.pairingId)) {
-      setApprovalForm(defaultApprovalForm);
-    }
-  }, [approvalForm.pairingId, dashboard.devicePairings]);
-
-  const onlineScreens = useMemo(
-    () => dashboard.screens.filter((screen) => isOnline(screen.lastSeenAt)).length,
-    [dashboard.screens]
+  const filteredChannelsForPlaylist = useMemo(
+    () => channels.filter((channel) => !playlistForm.clientId || channel.clientId === playlistForm.clientId),
+    [channels, playlistForm.clientId]
   );
-
-  const scheduledToday = useMemo(
-    () => dashboard.schedules.filter((schedule) => isScheduledToday(schedule.daysOfWeek)).length,
-    [dashboard.schedules]
+  const filteredChannelsForSchedule = useMemo(
+    () => channels.filter((channel) => !scheduleForm.clientId || channel.clientId === scheduleForm.clientId),
+    [channels, scheduleForm.clientId]
   );
-
-  const activeEvents = useMemo(
-    () => dashboard.events.filter((event) => isCurrentEvent(event.startsAt, event.endsAt) && event.isActive)
-      .length,
-    [dashboard.events]
-  );
-
-  const waitingPairings = useMemo(
-    () => dashboard.devicePairings.filter((entry) => entry.status === "waiting").length,
-    [dashboard.devicePairings]
-  );
-
-  const waitingPairingRecords = useMemo(
-    () => dashboard.devicePairings.filter((entry) => entry.status === "waiting"),
-    [dashboard.devicePairings]
-  );
-
-  const recentCommands = useMemo(() => dashboard.deviceCommands.slice(0, 10), [dashboard.deviceCommands]);
-
-  const playlistCards = useMemo(
+  const filteredPlaylistsForSchedule = useMemo(
     () =>
-      dashboard.playlists.map((playlist) => ({
-        playlist,
-        items: dashboard.playlistItems
-          .filter((item) => item.playlist === playlist.id)
-          .sort((left, right) => left.sortOrder - right.sortOrder)
-      })),
-    [dashboard.playlists, dashboard.playlistItems]
+      playlists.filter(
+        (playlist) =>
+          (!scheduleForm.clientId || playlist.clientId === scheduleForm.clientId) &&
+          (!scheduleForm.channelId || !playlist.channelId || playlist.channelId === scheduleForm.channelId)
+      ),
+    [playlists, scheduleForm.channelId, scheduleForm.clientId]
+  );
+  const filteredChannelsForDevice = useMemo(
+    () => channels.filter((channel) => !deviceForm.clientId || channel.clientId === deviceForm.clientId),
+    [channels, deviceForm.clientId]
   );
 
-  const selectedScreen = useMemo(
-    () => dashboard.screens.find((screen) => screen.id === selectedScreenId) ?? null,
-    [dashboard.screens, selectedScreenId]
-  );
+  useEffect(() => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    void refreshDashboard(token);
+  }, [token]);
 
-  const selectedProvisioning = useMemo(
-    () => dashboard.devicePairings.find((entry) => entry.screen === selectedScreenId) ?? null,
-    [dashboard.devicePairings, selectedScreenId]
-  );
+  useEffect(() => {
+    if (!flash) {
+      return;
+    }
+    const timer = window.setTimeout(() => setFlash(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
 
-  const canSeeAllClients = authRecord?.role === "owner" || !authRecord?.client;
-  const canManageUsers = authRecord?.role === "owner" || authRecord?.role === "manager";
-  const installUrl =
-    typeof window === "undefined"
-      ? "https://cms.berry-secure.pl/app/maasck.apk"
-      : new URL("/app/maasck.apk", window.location.origin).toString();
+  async function refreshDashboard(nextToken = token) {
+    if (!nextToken) {
+      return;
+    }
 
-  function triggerRefresh() {
-    setRefreshNonce((current) => current + 1);
+    setLoading(true);
+    try {
+      const payload = await fetchBootstrap(nextToken);
+      setDashboard(payload);
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setLoading(false);
+    }
   }
 
-  useEffect(() => {
-    if (!pb.authStore.isValid || typeof window === "undefined") {
+  function handleError(error: unknown) {
+    if (error instanceof ApiError && error.status === 401) {
+      clearToken();
+      setToken("");
+      setDashboard(emptyBootstrap);
+      setFlash({ kind: "error", text: "Sesja wygasła. Zaloguj się ponownie." });
       return;
     }
 
-    let cancelled = false;
+    const message = error instanceof Error ? error.message : "Nie udało się obsłużyć żądania.";
+    setFlash({ kind: "error", text: message });
+  }
 
-    const checkApk = async () => {
-      try {
-        const response = await fetch(installUrl, {
-          method: "HEAD",
-          cache: "no-store"
-        });
+  async function runMutation(action: () => Promise<unknown>, successText: string, afterSuccess?: () => void) {
+    if (!token) {
+      return;
+    }
 
-        if (!cancelled) {
-          setApkAvailable(response.ok);
-        }
-      } catch {
-        if (!cancelled) {
-          setApkAvailable(false);
-        }
-      }
-    };
-
-    void checkApk();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [installUrl, authRecord?.id]);
+    setSubmitting(true);
+    try {
+      await action();
+      await refreshDashboard(token);
+      afterSuccess?.();
+      setFlash({ kind: "success", text: successText });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setFlash(null);
-
+    setSubmitting(true);
     try {
-      await pb.collection("cms_users").authWithPassword(loginForm.email, loginForm.password);
-      setLoginForm({ email: "", password: "" });
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Sesja CMS została otwarta poprawnie."
-      });
+      const response = await login(loginForm.email, loginForm.password);
+      storeToken(response.token);
+      setToken(response.token);
+      setFlash({ kind: "success", text: "Zalogowano do nowego CMS." });
     } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zalogować do kolekcji cms_users.")
-      });
+      handleError(error);
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  function handleLogout() {
-    pb.authStore.clear();
-    setActiveSection("overview");
-    showFlash(setFlash, {
-      kind: "success",
-      text: "Wylogowano z panelu CMS."
+  async function handleLogout() {
+    if (token) {
+      try {
+        await logout(token);
+      } catch {
+        // ignore
+      }
+    }
+
+    clearToken();
+    setToken("");
+    setDashboard(emptyBootstrap);
+  }
+
+  function beginUserEdit(user: UserRecord) {
+    setUserForm({
+      id: user.id,
+      email: user.email,
+      password: "",
+      name: user.name,
+      role: user.role
     });
+    setActiveSection("users");
   }
 
-  async function handleCreateClient(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    try {
-      await pb.collection("clients").create({
-        name: clientForm.name,
-        slug: slugify(clientForm.slug || clientForm.name),
-        brandColor: clientForm.brandColor
-      });
-      setClientForm(defaultClientForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Dodano nowego klienta."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zapisać klienta.")
-      });
-    }
+  function beginClientEdit(client: ClientRecord) {
+    setClientForm({
+      id: client.id,
+      name: client.name,
+      slug: client.slug,
+      brandColor: client.brandColor
+    });
+    setActiveSection("clients");
   }
 
-  async function handleCreateChannel(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    try {
-      await pb.collection("channels").create({
-        client: channelForm.client,
-        name: channelForm.name,
-        slug: slugify(channelForm.slug || channelForm.name),
-        description: channelForm.description,
-        orientation: channelForm.orientation
-      });
-      setChannelForm(defaultChannelForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Kanał został zapisany."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się dodać kanału.")
-      });
-    }
+  function beginChannelEdit(channel: ChannelRecord) {
+    setChannelForm({
+      id: channel.id,
+      clientId: channel.clientId,
+      name: channel.name,
+      slug: channel.slug,
+      description: channel.description,
+      orientation: channel.orientation
+    });
+    setActiveSection("channels");
   }
 
-  async function handleCreateCmsUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!canManageUsers) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Twoja rola nie może tworzyć nowych kont CMS."
-      });
-      return;
-    }
-
-    if (authRecord?.role !== "owner" && cmsUserForm.role === "owner") {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Tylko owner może tworzyć kolejnego ownera."
-      });
-      return;
-    }
-
-    const clientId = cmsUserForm.client || authRecord?.client || "";
-    if (cmsUserForm.role !== "owner" && !clientId) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Manager i editor muszą być przypięci do klienta."
-      });
-      return;
-    }
-
-    try {
-      await pb.collection("cms_users").create(
-        compactRecord({
-          email: cmsUserForm.email.trim(),
-          password: cmsUserForm.password,
-          passwordConfirm: cmsUserForm.password,
-          name: cmsUserForm.name,
-          role: cmsUserForm.role,
-          client: cmsUserForm.role === "owner" ? undefined : clientId
-        })
-      );
-
-      setCmsUserForm(defaultCmsUserForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Nowe konto CMS zostało utworzone."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się utworzyć użytkownika CMS.")
-      });
-    }
-  }
-
-  async function handleApproveWaitingDevice(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const pairing = dashboard.devicePairings.find(
-      (entry) => entry.id === approvalForm.pairingId && entry.status === "waiting"
-    );
-
-    if (!pairing) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Wybierz urządzenie oczekujące, które chcesz zatwierdzić."
-      });
-      return;
-    }
-
-    const clientId = approvalForm.client || authRecord?.client || "";
-    if (!clientId) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Wybierz klienta, do którego ma trafić urządzenie."
-      });
-      return;
-    }
-
-    if (!approvalForm.channel) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Wybierz kanał, do którego przypniesz urządzenie."
-      });
-      return;
-    }
-
-    const deviceName =
-      approvalForm.name.trim() || pairing.deviceName || `Android TV ${pairing.pairingCode}`;
-    const locationLabel =
-      approvalForm.locationLabel.trim() || pairing.locationLabel || `${deviceName} / nowa instalacja`;
-    const email = buildScreenEmailFromInstallerId(deviceName, pairing.installerId);
-
-    try {
-      let existingScreen: ScreenUserRecord | null = null;
-
-      if (pairing.screen) {
-        try {
-          existingScreen = await pb.collection("screen_users").getOne<ScreenUserRecord>(pairing.screen);
-        } catch {
-          existingScreen = null;
-        }
-      }
-
-      if (!existingScreen) {
-        try {
-          existingScreen = await pb
-            .collection("screen_users")
-            .getFirstListItem<ScreenUserRecord>(
-              `email="${escapeFilterValue(email)}"`
-            );
-        } catch {
-          existingScreen = null;
-        }
-      }
-
-      if (existingScreen && existingScreen.email !== email) {
-        await pb.collection("screen_users").delete(existingScreen.id);
-        existingScreen = null;
-      }
-
-      const screenPayload = {
-        email,
-        name: deviceName,
-        client: clientId,
-        channel: approvalForm.channel,
-        locationLabel,
-        volumePercent: Number(approvalForm.volumePercent) || 80,
-        status: "pairing",
-        notes: approvalForm.notes,
-        desiredDisplayState: "active",
-        deviceModel: pairing.deviceName,
-        appVersion: pairing.appVersion,
-        networkMode: "dhcp"
-      };
-
-      let createdScreen: ScreenUserRecord;
-
-      if (existingScreen) {
-        createdScreen = await pb.collection("screen_users").update(existingScreen.id, screenPayload);
-      } else {
-        createdScreen = await pb.collection("screen_users").create({
-          ...screenPayload,
-          password: pairing.installerId,
-          passwordConfirm: pairing.installerId
-        });
-      }
-
-      await pb.collection("device_pairings").update(pairing.id, {
-        status: "paired",
-        deviceName,
-        client: clientId,
-        channel: approvalForm.channel,
-        locationLabel,
-        screen: createdScreen.id,
-        assignedEmail: email
-      });
-
-      setApprovalForm(defaultApprovalForm);
-      setSelectedScreenId(createdScreen.id);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: `Urządzenie zostało zatwierdzone. Player zaloguje się jako ${email}.`
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zatwierdzić urządzenia.")
-      });
-    }
-  }
-
-  async function handleUpdateDeviceProfile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!selectedScreen) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Najpierw wybierz urządzenie do edycji."
-      });
-      return;
-    }
-
-    const nextDisplayState = deviceProfileForm.desiredDisplayState as "active" | "blackout";
-
-    try {
-      await pb.collection("screen_users").update(selectedScreen.id, {
-        name: deviceProfileForm.name,
-        client: deviceProfileForm.client,
-        channel: deviceProfileForm.channel,
-        locationLabel: deviceProfileForm.locationLabel,
-        volumePercent: Number(deviceProfileForm.volumePercent) || 80,
-        desiredDisplayState: nextDisplayState,
-        networkMode: deviceProfileForm.networkMode,
-        networkAddress: deviceProfileForm.networkAddress,
-        networkGateway: deviceProfileForm.networkGateway,
-        networkDns: deviceProfileForm.networkDns,
-        wifiSsid: deviceProfileForm.wifiSsid,
-        networkNotes: deviceProfileForm.networkNotes,
-        notes: deviceProfileForm.notes
-      });
-
-      if (selectedProvisioning) {
-        await pb.collection("device_pairings").update(selectedProvisioning.id, {
-          client: deviceProfileForm.client,
-          channel: deviceProfileForm.channel,
-          locationLabel: deviceProfileForm.locationLabel,
-          deviceName: deviceProfileForm.name
-        });
-      }
-
-      if (selectedScreen.desiredDisplayState !== nextDisplayState) {
-        await queueDeviceCommand(
-          selectedScreen.id,
-          nextDisplayState === "blackout" ? "blackout" : "wake",
-          false
-        );
-      }
-
-      await queueDeviceCommand(selectedScreen.id, "sync", false);
-
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Profil urządzenia został zaktualizowany."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zaktualizować urządzenia.")
-      });
-    }
-  }
-
-  async function handleCreateMedia(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!mediaFile) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Najpierw wybierz plik wideo lub grafikę."
-      });
-      return;
-    }
-
-    try {
-      const formData = new FormData();
-      formData.append("client", mediaForm.client);
-      formData.append("title", mediaForm.title);
-      formData.append("kind", mediaForm.kind);
-      formData.append("asset", mediaFile);
-      formData.append("durationSeconds", mediaForm.durationSeconds);
-      formData.append("hasAudio", String(mediaForm.hasAudio));
-      formData.append("status", mediaForm.status);
-      formData.append("tags", mediaForm.tags);
-      await pb.collection("media_assets").create(formData);
-      setMediaFile(null);
-      setMediaForm(defaultMediaForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Media zostały dodane do biblioteki."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się wgrać pliku.")
-      });
-    }
-  }
-
-  async function handleCreatePlaylist(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    try {
-      await pb.collection("playlists").create(
-        compactRecord({
-          client: playlistForm.client,
-          channel: playlistForm.channel || undefined,
-          name: playlistForm.name,
-          isActive: playlistForm.isActive,
-          notes: playlistForm.notes
-        })
-      );
-      setPlaylistForm(defaultPlaylistForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Playlista została utworzona."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zapisać playlisty.")
-      });
-    }
-  }
-
-  async function handleCreatePlaylistItem(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    try {
-      const playlist = dashboard.playlists.find((entry) => entry.id === playlistItemForm.playlist);
-      if (!playlist) {
-        throw new Error("Wybierz istniejącą playlistę.");
-      }
-
-      await pb.collection("playlist_items").create({
-        client: playlist.client,
-        playlist: playlistItemForm.playlist,
-        mediaAsset: playlistItemForm.mediaAsset,
-        sortOrder: Number(playlistItemForm.sortOrder) || 10,
-        loopCount: Number(playlistItemForm.loopCount) || 1,
-        volumePercent: Number(playlistItemForm.volumePercent) || 100
-      });
-
-      setPlaylistItemForm(defaultPlaylistItemForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Element playlisty został dodany."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się dodać elementu playlisty.")
-      });
-    }
-  }
-
-  async function handleCreateSchedule(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    try {
-      const payload = compactRecord({
-        client: scheduleForm.client,
-        channel: scheduleForm.channel,
-        playlist: scheduleForm.playlist,
-        label: scheduleForm.label,
-        startDate: toIsoDate(scheduleForm.startDate) || undefined,
-        endDate: toIsoDate(scheduleForm.endDate) || undefined,
-        startTime: scheduleForm.startTime,
-        endTime: scheduleForm.endTime,
-        daysOfWeek: scheduleForm.daysOfWeek,
-        priority: Number(scheduleForm.priority) || 100,
-        isActive: scheduleForm.isActive
-      });
-
-      if (editingScheduleId) {
-        await pb.collection("schedule_rules").update(editingScheduleId, payload);
-      } else {
-        await pb.collection("schedule_rules").create(payload);
-      }
-
-      resetScheduleEditor(setScheduleForm, setEditingScheduleId);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: editingScheduleId
-          ? "Reguła harmonogramu została zaktualizowana."
-          : "Reguła harmonogramu została zapisana."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zapisać harmonogramu.")
-      });
-    }
-  }
-
-  async function handleCreateEvent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    try {
-      await pb.collection("events").create(
-        compactRecord({
-          client: eventForm.client,
-          channel: eventForm.channel || undefined,
-          screen: eventForm.screen || undefined,
-          playlist: eventForm.playlist,
-          title: eventForm.title,
-          message: eventForm.message,
-          startsAt: toIsoDateTime(eventForm.startsAt),
-          endsAt: toIsoDateTime(eventForm.endsAt),
-          priority: Number(eventForm.priority) || 300,
-          isActive: eventForm.isActive
-        })
-      );
-      setEventForm(defaultEventForm);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Event override został dodany."
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się zapisać eventu.")
-      });
-    }
-  }
-
-  async function queueDeviceCommand(
-    screenId: string,
-    commandType: DeviceCommandRecord["commandType"],
-    mirrorDisplayState = true
-  ) {
-    const payload =
-      commandType === "blackout" || commandType === "wake"
-        ? JSON.stringify({
-            desiredDisplayState: commandType === "blackout" ? "blackout" : "active"
-          })
-        : "";
-
-    if (mirrorDisplayState) {
-      if (commandType === "blackout") {
-        await pb.collection("screen_users").update(screenId, {
-          desiredDisplayState: "blackout"
-        });
-      }
-
-      if (commandType === "wake") {
-        await pb.collection("screen_users").update(screenId, {
-          desiredDisplayState: "active"
-        });
-      }
-    }
-
-    await pb.collection("device_commands").create(
-      compactRecord({
-        screen: screenId,
-        commandType,
-        payload,
-        status: "queued",
-        issuedBy: authRecord?.id || undefined,
-        expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
-      })
-    );
-  }
-
-  async function handleQueueCommand(screen: ScreenUserRecord, commandType: DeviceCommandRecord["commandType"]) {
-    try {
-      await queueDeviceCommand(screen.id, commandType);
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: `Komenda ${commandType} została zakolejkowana dla ${screen.locationLabel || screen.name}.`
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, "Nie udało się wysłać komendy do urządzenia.")
-      });
-    }
-  }
-
-  async function handleDelete(collection: string, id: string, label: string) {
-    if (collection === "cms_users" && id === authRecord?.id) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Nie usuwaj właśnie zalogowanego konta."
-      });
-      return;
-    }
-
-    const confirmed = window.confirm(`Usunąć ${label}?`);
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      if (collection === "screen_users") {
-        const screen = dashboard.screens.find((entry) => entry.id === id) ?? null;
-        const relatedPairings = dashboard.devicePairings.filter(
-          (entry) => entry.screen === id || (screen ? entry.assignedEmail === screen.email : false)
-        );
-
-        await Promise.all(
-          relatedPairings.map((entry) =>
-            pb.collection("device_pairings").delete(entry.id).catch(() => undefined)
-          )
-        );
-      }
-
-      await pb.collection(collection).delete(id);
-      if (collection === "schedule_rules" && id === editingScheduleId) {
-        resetScheduleEditor(setScheduleForm, setEditingScheduleId);
-      }
-      if (collection === "device_pairings" && approvalForm.pairingId === id) {
-        setApprovalForm(defaultApprovalForm);
-      }
-      triggerRefresh();
-      showFlash(setFlash, {
-        kind: "success",
-        text: `${label} zostało usunięte.`
-      });
-    } catch (error) {
-      showFlash(setFlash, {
-        kind: "error",
-        text: readError(error, `Nie udało się usunąć: ${label}.`)
-      });
-    }
-  }
-
-  async function handleCopyInstallUrl() {
-    try {
-      await navigator.clipboard.writeText(installUrl);
-      showFlash(setFlash, {
-        kind: "success",
-        text: "Link do instalacji został skopiowany do schowka."
-      });
-    } catch {
-      showFlash(setFlash, {
-        kind: "error",
-        text: "Nie udało się skopiować linku. Skopiuj go ręcznie z panelu."
-      });
-    }
-  }
-
-  async function handleMediaFileSelection(file: File | null) {
-    setMediaFile(file);
-    if (!file) {
-      return;
-    }
-
-    setMediaForm((current) => ({
+  function beginPlaylistEdit(playlist: PlaylistRecord) {
+    setPlaylistForm({
+      id: playlist.id,
+      clientId: playlist.clientId,
+      channelId: playlist.channelId,
+      name: playlist.name,
+      isActive: playlist.isActive,
+      notes: playlist.notes
+    });
+    setPlaylistItemForm((current) => ({
       ...current,
-      title: current.title || stripExtension(file.name),
-      kind: file.type.startsWith("image/") ? "image" : "video"
+      playlistId: playlist.id,
+      sortOrder: String((playlist.items.at(-1)?.sortOrder || 0) + 10)
     }));
-
-    if (file.type.startsWith("video/")) {
-      const duration = await readVideoDuration(file);
-      setMediaForm((current) => ({
-        ...current,
-        durationSeconds: String(Math.ceil(duration || 0))
-      }));
-    }
+    setActiveSection("playlists");
   }
 
-  if (!pb.authStore.isValid) {
+  function beginScheduleEdit(schedule: ScheduleRecord) {
+    setScheduleForm({
+      id: schedule.id,
+      clientId: schedule.clientId,
+      channelId: schedule.channelId,
+      playlistId: schedule.playlistId,
+      label: schedule.label,
+      startDate: schedule.startDate,
+      endDate: schedule.endDate,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      daysOfWeek: schedule.daysOfWeek,
+      priority: String(schedule.priority),
+      isActive: schedule.isActive
+    });
+    setActiveSection("schedule");
+  }
+
+  function beginDeviceApproval(device: DeviceRecord) {
+    setDeviceForm({
+      id: device.id,
+      serial: device.serial,
+      name: device.name === "Android TV" ? `Ekran ${device.serial}` : device.name,
+      clientId: device.clientId,
+      channelId: device.channelId,
+      locationLabel: device.locationLabel,
+      notes: device.notes,
+      desiredDisplayState: device.desiredDisplayState,
+      volumePercent: String(device.volumePercent || 80)
+    });
+    setActiveSection("devices");
+  }
+
+  function beginDeviceEdit(device: DeviceRecord) {
+    setDeviceForm({
+      id: device.id,
+      serial: device.serial,
+      name: device.name,
+      clientId: device.clientId,
+      channelId: device.channelId,
+      locationLabel: device.locationLabel,
+      notes: device.notes,
+      desiredDisplayState: device.desiredDisplayState,
+      volumePercent: String(device.volumePercent || 80)
+    });
+    setActiveSection("devices");
+  }
+
+  function toggleScheduleDay(day: number) {
+    const current = new Set(
+      scheduleForm.daysOfWeek
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => !Number.isNaN(value))
+    );
+    if (current.has(day)) {
+      current.delete(day);
+    } else {
+      current.add(day);
+    }
+
+    const nextDays = [...current].sort((left, right) => left - right).join(",");
+    setScheduleForm((entry) => ({ ...entry, daysOfWeek: nextDays }));
+  }
+
+  const stats = [
+    { label: "Klienci", value: clients.length, hint: "tenanty w systemie" },
+    { label: "Kanały", value: channels.length, hint: "grupy emisji" },
+    { label: "Media", value: media.length, hint: "pliki opublikowane i draft" },
+    { label: "Playlisty", value: playlists.length, hint: "kolejki treści" },
+    { label: "Harmonogramy", value: schedules.length, hint: "aktywne reguły" },
+    { label: "Urządzenia online", value: approvedDevices.filter((device) => device.online).length, hint: "serca playerów" }
+  ];
+
+  if (!token) {
     return (
-      <div className="auth-shell">
-        <div className="auth-copy">
-          <span className="eyebrow">Signal Deck</span>
-          <h1>DS z CMS-em, parowaniem Android TV i szybką obsługą sieci ekranów.</h1>
+      <main className="login-shell">
+        <div className="login-card">
+          <span className="eyebrow">Digital Signage Control</span>
+          <h1>Jeden serwer. Jeden CMS. Jeden player.</h1>
           <p>
-            Panel loguje się do kolekcji <code>cms_users</code> w PocketBase i po zalogowaniu
-            obsługuje klientów, użytkowników CMS, urządzenia, screenshoty, media, playlisty,
-            scheduling oraz eventy override.
+            To jest nowy panel oparty o jeden backend. Logujesz się tutaj, zarządzasz mediami i zatwierdzasz urządzenia
+            po numerze seryjnym.
           </p>
-          <div className="auth-note">
-            <span>API</span>
-            <strong>{pocketbaseUrl}</strong>
-          </div>
+          <form className="stack-form" onSubmit={handleLogin}>
+            <label>
+              <span>Email</span>
+              <input
+                id="login-email"
+                name="login-email"
+                type="email"
+                value={loginForm.email}
+                onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
+                autoComplete="username"
+                required
+              />
+            </label>
+            <label>
+              <span>Hasło</span>
+              <input
+                id="login-password"
+                name="login-password"
+                type="password"
+                value={loginForm.password}
+                onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            <button className="primary-button" type="submit" disabled={submitting}>
+              {submitting ? "Logowanie..." : "Wejdź do CMS"}
+            </button>
+          </form>
+          {flash ? <div className={`flash ${flash.kind}`}>{flash.text}</div> : null}
         </div>
-
-        <form className="auth-card" onSubmit={handleLogin}>
-          <h2>Logowanie CMS</h2>
-          <p>Użyj konta z kolekcji <code>cms_users</code>.</p>
-
-          <label className="field">
-            <span>Email</span>
-            <input
-              id="cms-login-email"
-              name="email"
-              type="email"
-              value={loginForm.email}
-              onChange={(event) =>
-                setLoginForm((current) => ({ ...current, email: event.target.value }))
-              }
-              placeholder="owner@berry-secure.pl"
-              required
-            />
-          </label>
-
-          <label className="field">
-            <span>Hasło</span>
-            <input
-              id="cms-login-password"
-              name="password"
-              type="password"
-              value={loginForm.password}
-              onChange={(event) =>
-                setLoginForm((current) => ({ ...current, password: event.target.value }))
-              }
-              placeholder="••••••••"
-              required
-            />
-          </label>
-
-          {flash ? <FlashBanner flash={flash} /> : null}
-
-          <button className="primary-button" type="submit">
-            Wejdź do panelu
-          </button>
-        </form>
-      </div>
+      </main>
     );
   }
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand-block">
-          <span className="eyebrow">Signal Deck</span>
-          <h2>CMS</h2>
-          <p>
-            {authRecord?.name || authRecord?.email}
-            <span className="muted-line">
-              {authRecord?.role || "operator"}
-              {authRecord?.expand?.client ? ` • ${authRecord.expand.client.name}` : ""}
-            </span>
+        <div>
+          <span className="eyebrow">Berry Secure</span>
+          <h1>Signage CMS</h1>
+          <p className="sidebar-copy">
+            Prosty panel operacyjny do demo i wdrożeń. Approval urządzeń działa po stałym numerze seryjnym.
           </p>
         </div>
 
-        <nav className="nav-stack">
+        <nav className="sidebar-nav" aria-label="Sekcje CMS">
           {navItems.map((item) => (
             <button
               key={item.key}
-              className={item.key === activeSection ? "nav-item active" : "nav-item"}
-              onClick={() => setActiveSection(item.key)}
+              className={`nav-button ${activeSection === item.key ? "active" : ""}`}
               type="button"
+              onClick={() => setActiveSection(item.key)}
             >
               <strong>{item.label}</strong>
               <span>{item.hint}</span>
@@ -1136,2037 +580,1551 @@ function App() {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="endpoint-pill">
-            <span>PocketBase</span>
-            <strong>{pocketbaseUrl}</strong>
+          <div>
+            <strong>{dashboard.user.name || "Admin"}</strong>
+            <span>{dashboard.user.email}</span>
           </div>
-          <button className="ghost-button" onClick={handleLogout} type="button">
+          <button className="secondary-button" type="button" onClick={() => void handleLogout()}>
             Wyloguj
           </button>
         </div>
       </aside>
 
       <main className="content">
-        <header className="topbar">
+        <header className="content-header">
           <div>
-            <span className="eyebrow">berry-secure</span>
-            <h1>Minimalistyczny panel operacyjny</h1>
+            <span className="eyebrow">Nowa architektura</span>
+            <h2>{sectionTitle(activeSection)}</h2>
           </div>
-          <div className="topbar-meta">
-            <MetricBadge label="Online" value={`${onlineScreens}/${dashboard.screens.length}`} />
-            <MetricBadge label="Pairing queue" value={String(waitingPairings)} />
-            <MetricBadge label="Schedule today" value={String(scheduledToday)} />
-            <MetricBadge label="Active events" value={String(activeEvents)} />
+          <div className="header-actions">
+            <span className="server-pill">API: {dashboard.installation.apiBaseUrl || getApiBaseUrl()}</span>
+            <button className="secondary-button" type="button" onClick={() => void refreshDashboard()} disabled={loading}>
+              {loading ? "Ładowanie..." : "Odśwież dane"}
+            </button>
           </div>
         </header>
 
-        {flash ? <FlashBanner flash={flash} /> : null}
-
-        {isLoading ? (
-          <section className="loading-state">Ładuję dane z PocketBase…</section>
-        ) : null}
+        {flash ? <div className={`flash ${flash.kind}`}>{flash.text}</div> : null}
 
         {activeSection === "overview" ? (
-          <section className="section-grid">
-            <Panel title="Sieć ekranów" subtitle="Stan na żywo i szybki pogląd na całą sieć">
-              <div className="stats-grid">
-                <StatCard label="Klienci" value={String(dashboard.clients.length)} />
-                <StatCard label="Kanały" value={String(dashboard.channels.length)} />
-                <StatCard label="Użytkownicy CMS" value={String(dashboard.cmsUsers.length)} />
-                <StatCard label="Ekrany online" value={String(onlineScreens)} />
-                <StatCard label="Urządzenia oczekujące" value={String(waitingPairings)} />
-                <StatCard label="Biblioteka media" value={String(dashboard.mediaAssets.length)} />
-              </div>
-            </Panel>
+          <section className="section-stack">
+            <div className="stats-grid">
+              {stats.map((item) => (
+                <article key={item.label} className="stat-card">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <small>{item.hint}</small>
+                </article>
+              ))}
+            </div>
 
-            <Panel title="Nowe urządzenia" subtitle="Instalacje playera, które czekają na zatwierdzenie w CMS">
-              <div className="list-stack">
-                {dashboard.devicePairings
-                  .filter((pairing) => pairing.status === "waiting")
-                  .slice(0, 6)
-                  .map((pairing) => (
-                    <RecordRow
-                      key={pairing.id}
-                      title={pairing.deviceName}
-                      subtitle={`${pairing.platform || "platforma?"} • ${pairing.appVersion || "brak wersji"}`}
-                      meta={`ID ${pairing.pairingCode} • ostatni heartbeat ${formatHeartbeat(pairing.lastSeenAt) || "brak"}`}
-                      badge={<span className="soft-badge">{pairing.status}</span>}
-                    />
-                  ))}
-                {!waitingPairings ? (
-                  <EmptyState text="Nie ma urządzeń oczekujących na zatwierdzenie." />
-                ) : null}
-              </div>
-            </Panel>
-
-            <Panel title="Ostatnie komendy" subtitle="To, co poleciało do Android TV z panelu">
-              <div className="list-stack">
-                {recentCommands.map((command) => (
-                  <RecordRow
-                    key={command.id}
-                    title={translateCommand(command.commandType)}
-                    subtitle={command.expand?.screen?.locationLabel || command.expand?.screen?.name || "Urządzenie"}
-                    meta={`${command.status} • ${formatDateTime(command.created)}`}
-                    badge={<span className="soft-badge">{command.status}</span>}
-                  />
-                ))}
-                {!recentCommands.length ? (
-                  <EmptyState text="Nie ma jeszcze żadnych zdalnych komend." />
-                ) : null}
-              </div>
-            </Panel>
-          </section>
-        ) : null}
-
-        {activeSection === "clients" ? (
-          <section className="section-grid">
-            <Panel title="Nowy klient" subtitle="Nowy tenant w systemie">
-              <form className="form-grid" onSubmit={handleCreateClient}>
-                <TextField
-                  label="Nazwa"
-                  value={clientForm.name}
-                  onChange={(value) => setClientForm((current) => ({ ...current, name: value }))}
-                  placeholder="Berry Secure"
-                  required
-                />
-                <TextField
-                  label="Slug"
-                  value={clientForm.slug}
-                  onChange={(value) => setClientForm((current) => ({ ...current, slug: value }))}
-                  placeholder="berry-secure"
-                />
-                <TextField
-                  label="Kolor marki"
-                  value={clientForm.brandColor}
-                  onChange={(value) =>
-                    setClientForm((current) => ({ ...current, brandColor: value }))
-                  }
-                  type="color"
-                  required
-                />
-                <button className="primary-button" type="submit">
-                  Dodaj klienta
-                </button>
-              </form>
-            </Panel>
-
-            <Panel title="Klienci" subtitle="Podział na firmy i tenantów">
-              <div className="card-grid">
-                {dashboard.clients.map((client) => (
-                  <article className="mini-card" key={client.id}>
-                    <div className="mini-card-head">
-                      <span
-                        className="color-dot"
-                        style={{ backgroundColor: client.brandColor || "#D46A3B" }}
-                      />
-                      <h3>{client.name}</h3>
-                    </div>
-                    <p>{client.slug}</p>
-                    <button
-                      className="danger-button"
-                      onClick={() => handleDelete("clients", client.id, client.name)}
-                      type="button"
-                    >
-                      Usuń
-                    </button>
-                  </article>
-                ))}
-                {!dashboard.clients.length ? <EmptyState text="Nie ma jeszcze żadnych klientów." /> : null}
-              </div>
-            </Panel>
-          </section>
-        ) : null}
-
-        {activeSection === "channels" ? (
-          <section className="section-grid">
-            <Panel title="Nowy kanał" subtitle="Kanały grupują ekrany i harmonogram">
-              <form className="form-grid" onSubmit={handleCreateChannel}>
-                <SelectField
-                  label="Klient"
-                  value={channelForm.client}
-                  onChange={(value) => setChannelForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required
-                />
-                <TextField
-                  label="Nazwa kanału"
-                  value={channelForm.name}
-                  onChange={(value) => setChannelForm((current) => ({ ...current, name: value }))}
-                  placeholder="Lobby"
-                  required
-                />
-                <TextField
-                  label="Slug"
-                  value={channelForm.slug}
-                  onChange={(value) => setChannelForm((current) => ({ ...current, slug: value }))}
-                  placeholder="lobby"
-                />
-                <TextField
-                  label="Opis"
-                  value={channelForm.description}
-                  onChange={(value) =>
-                    setChannelForm((current) => ({ ...current, description: value }))
-                  }
-                  placeholder="Strefa wejściowa / recepcja"
-                />
-                <SelectField
-                  label="Orientacja"
-                  value={channelForm.orientation}
-                  onChange={(value) =>
-                    setChannelForm((current) => ({
-                      ...current,
-                      orientation: value as "landscape" | "portrait"
-                    }))
-                  }
-                  options={[
-                    { value: "landscape", label: "Landscape" },
-                    { value: "portrait", label: "Portrait" }
-                  ]}
-                  required
-                />
-                <button className="primary-button" type="submit">
-                  Dodaj kanał
-                </button>
-              </form>
-            </Panel>
-
-            <Panel title="Kanały" subtitle="Struktura logiczna sieci DS">
-              <div className="list-stack">
-                {dashboard.channels.map((channel) => (
-                  <RecordRow
-                    key={channel.id}
-                    title={channel.name}
-                    subtitle={channel.description || "Bez opisu"}
-                    meta={`${channel.expand?.client?.name || "Brak klienta"} • ${channel.orientation}`}
-                    badge={<span className="soft-badge">{channel.slug}</span>}
-                    action={
-                      <button
-                        className="danger-button"
-                        onClick={() => handleDelete("channels", channel.id, channel.name)}
-                        type="button"
-                      >
-                        Usuń
+            <div className="card-grid two-columns">
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Pending approval</h3>
+                  <span>{pendingDevices.length} szt.</span>
+                </header>
+                {pendingDevices.length ? (
+                  <div className="list-stack">
+                    {pendingDevices.map((device) => (
+                      <button key={device.id} className="list-card interactive" type="button" onClick={() => beginDeviceApproval(device)}>
+                        <div>
+                          <strong>{device.serial}</strong>
+                          <span>{device.deviceModel}</span>
+                        </div>
+                        <div className="align-right">
+                          <span className="status-pill pending">waiting</span>
+                          <small>{formatDateTime(device.lastSeenAt)}</small>
+                        </div>
                       </button>
-                    }
-                  />
-                ))}
-                {!dashboard.channels.length ? <EmptyState text="Brak kanałów do wyświetlenia." /> : null}
-              </div>
-            </Panel>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Brak nowych urządzeń oczekujących na approval." />
+                )}
+              </article>
+
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Ostatnio widziane urządzenia</h3>
+                  <span>{approvedDevices.length} zatwierdzonych</span>
+                </header>
+                {approvedDevices.length ? (
+                  <div className="list-stack">
+                    {approvedDevices.slice(0, 6).map((device) => (
+                      <div key={device.id} className="list-card">
+                        <div>
+                          <strong>{device.name}</strong>
+                          <span>
+                            {device.clientName || "bez klienta"} · {device.channelName || "bez kanału"}
+                          </span>
+                        </div>
+                        <div className="align-right">
+                          <span className={`status-pill ${device.online ? "online" : "offline"}`}>
+                            {device.online ? "online" : "offline"}
+                          </span>
+                          <small>{device.playerState}</small>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Nie ma jeszcze żadnego zatwierdzonego playera." />
+                )}
+              </article>
+            </div>
           </section>
         ) : null}
 
         {activeSection === "users" ? (
-          <section className="section-grid">
-            <Panel title="Nowe konto CMS" subtitle="Tworzenie i usuwanie kont operatorów panelu">
-              {canManageUsers ? (
-                <form className="form-grid" onSubmit={handleCreateCmsUser}>
-                  <TextField
-                    label="Imię / nazwa"
-                    value={cmsUserForm.name}
-                    onChange={(value) => setCmsUserForm((current) => ({ ...current, name: value }))}
-                    placeholder="Anna Admin"
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runMutation(
+                    async () => {
+                      if (!token) {
+                        return;
+                      }
+                      if (userForm.id) {
+                        await updateUser(token, userForm.id, {
+                          email: userForm.email,
+                          password: userForm.password || undefined,
+                          name: userForm.name,
+                          role: userForm.role
+                        });
+                      } else {
+                        await createUser(token, userForm);
+                      }
+                    },
+                    userForm.id ? "Zapisano zmiany użytkownika." : "Dodano nowe konto CMS.",
+                    () => setUserForm(emptyUserForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{userForm.id ? "Edytuj użytkownika" : "Dodaj użytkownika"}</h3>
+                  {userForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setUserForm(emptyUserForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Imię i nazwisko" htmlFor="user-name">
+                  <input
+                    id="user-name"
+                    name="user-name"
+                    value={userForm.name}
+                    onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))}
                     required
                   />
-                  <TextField
-                    label="Email"
-                    value={cmsUserForm.email}
-                    onChange={(value) => setCmsUserForm((current) => ({ ...current, email: value }))}
+                </Field>
+                <Field label="Email" htmlFor="user-email">
+                  <input
+                    id="user-email"
+                    name="user-email"
                     type="email"
-                    placeholder="anna@berry-secure.pl"
+                    value={userForm.email}
+                    onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
                     required
                   />
-                  <TextField
-                    label="Hasło"
-                    value={cmsUserForm.password}
-                    onChange={(value) =>
-                      setCmsUserForm((current) => ({ ...current, password: value }))
-                    }
+                </Field>
+                <Field label={userForm.id ? "Nowe hasło (opcjonalnie)" : "Hasło"} htmlFor="user-password">
+                  <input
+                    id="user-password"
+                    name="user-password"
                     type="password"
-                    placeholder="Mocne hasło"
-                    required
+                    minLength={userForm.id ? 0 : 8}
+                    value={userForm.password}
+                    onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
+                    required={!userForm.id}
                   />
-                  <SelectField
-                    label="Rola"
-                    value={cmsUserForm.role}
-                    onChange={(value) =>
-                      setCmsUserForm((current) => ({
-                        ...current,
-                        role: value as "owner" | "manager" | "editor"
-                      }))
+                </Field>
+                <Field label="Rola" htmlFor="user-role">
+                  <select
+                    id="user-role"
+                    name="user-role"
+                    value={userForm.role}
+                    onChange={(event) =>
+                      setUserForm((current) => ({ ...current, role: event.target.value as UserRole }))
                     }
-                    options={[
-                      { value: "manager", label: "Manager" },
-                      { value: "editor", label: "Editor" },
-                      ...(authRecord?.role === "owner"
-                        ? [{ value: "owner", label: "Owner" }]
-                        : [])
-                    ]}
-                    required
-                  />
-                  <SelectField
-                    label="Klient"
-                    value={cmsUserForm.client}
-                    onChange={(value) => setCmsUserForm((current) => ({ ...current, client: value }))}
-                    options={[
-                      { value: "", label: "Brak przypięcia / owner globalny" },
-                      ...dashboard.clients.map((client) => ({
-                        value: client.id,
-                        label: client.name
-                      }))
-                    ]}
-                  />
-                  <button className="primary-button" type="submit">
-                    Dodaj konto CMS
-                  </button>
-                </form>
-              ) : (
-                <EmptyState text="Twoja rola może przeglądać użytkowników, ale nie tworzy nowych kont." />
-              )}
-            </Panel>
-
-            <Panel title="Użytkownicy CMS" subtitle="Kto ma dostęp do panelu i do którego klienta">
-              <div className="list-stack">
-                {dashboard.cmsUsers.map((user) => (
-                  <RecordRow
-                    key={user.id}
-                    title={user.name || user.email}
-                    subtitle={`${user.email} • ${user.role}`}
-                    meta={user.expand?.client?.name || "Globalny dostęp"}
-                    badge={<span className="soft-badge">{user.role}</span>}
-                    action={
-                      <button
-                        className="danger-button"
-                        disabled={user.id === authRecord?.id}
-                        onClick={() => handleDelete("cms_users", user.id, user.name || user.email)}
-                        type="button"
-                      >
-                        Usuń
-                      </button>
-                    }
-                  />
-                ))}
-                {!dashboard.cmsUsers.length ? <EmptyState text="Brak kont CMS do pokazania." /> : null}
-              </div>
-            </Panel>
-          </section>
-        ) : null}
-
-        {activeSection === "screens" ? (
-          <section className="section-grid">
-            <Panel title="Zatwierdź urządzenie oczekujące" subtitle="Wybierz ekran z kolejki i przypnij go do klienta oraz kanału">
-              <form className="form-grid" onSubmit={handleApproveWaitingDevice}>
-                <SelectField
-                  label="Urządzenie oczekujące"
-                  value={approvalForm.pairingId}
-                  onChange={(value) => {
-                    const pairing = waitingPairingRecords.find((entry) => entry.id === value) ?? null;
-                    setApprovalForm(pairing ? toApprovalForm(pairing, authRecord) : defaultApprovalForm);
-                  }}
-                  options={waitingPairingRecords.map((pairing) => ({
-                    value: pairing.id,
-                    label: `${pairing.deviceName} • ID ${pairing.pairingCode}`
-                  }))}
-                  required
-                />
-                <TextField
-                  label="Nazwa urządzenia"
-                  value={approvalForm.name}
-                  onChange={(value) => setApprovalForm((current) => ({ ...current, name: value }))}
-                  placeholder="Android TV Lobby"
-                  required
-                />
-                <SelectField
-                  label="Klient"
-                  value={approvalForm.client}
-                  onChange={(value) => setApprovalForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required={!authRecord?.client}
-                />
-                <SelectField
-                  label="Kanał"
-                  value={approvalForm.channel}
-                  onChange={(value) => setApprovalForm((current) => ({ ...current, channel: value }))}
-                  options={dashboard.channels
-                    .filter((channel) => {
-                      const clientId = approvalForm.client || authRecord?.client;
-                      return !clientId || channel.client === clientId;
-                    })
-                    .map((channel) => ({
-                      value: channel.id,
-                      label: channel.name
-                    }))}
-                  required
-                />
-                <TextField
-                  label="Lokalizacja"
-                  value={approvalForm.locationLabel}
-                  onChange={(value) =>
-                    setApprovalForm((current) => ({ ...current, locationLabel: value }))
-                  }
-                  placeholder="Warszawa / recepcja"
-                  required
-                />
-                <TextField
-                  label="Głośność %"
-                  value={approvalForm.volumePercent}
-                  onChange={(value) =>
-                    setApprovalForm((current) => ({ ...current, volumePercent: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <TextAreaField
-                  label="Notatki do urządzenia"
-                  value={approvalForm.notes}
-                  onChange={(value) => setApprovalForm((current) => ({ ...current, notes: value }))}
-                  placeholder="Samsung Android TV, zasilanie z UPS, kiosk mode."
-                />
-                <button className="primary-button" type="submit">
-                  Zatwierdź urządzenie
+                  >
+                    <option value="owner">Owner</option>
+                    <option value="manager">Manager</option>
+                    <option value="editor">Editor</option>
+                  </select>
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {submitting ? "Zapisywanie..." : userForm.id ? "Zapisz użytkownika" : "Dodaj konto"}
                 </button>
               </form>
-            </Panel>
 
-            <Panel title="Urządzenia oczekujące" subtitle="Nowe instalacje playera, które czekają na akceptację z CMS">
-              <div className="list-stack">
-                {waitingPairingRecords.map((pairing) => (
-                    <RecordRow
-                      key={pairing.id}
-                      title={pairing.deviceName}
-                      subtitle={`${pairing.platform || "platforma?"} • ${pairing.appVersion || "brak wersji"}`}
-                      meta={`ID ${pairing.pairingCode} • installer ${shortInstallerId(pairing.installerId)} • ostatni heartbeat ${formatHeartbeat(pairing.lastSeenAt) || "brak"}`}
-                      badge={<span className="soft-badge">waiting</span>}
-                      action={
-                        <div className="device-command-row">
-                          <button
-                            className="ghost-button"
-                            onClick={() => setApprovalForm(toApprovalForm(pairing, authRecord))}
-                            type="button"
-                          >
-                            Zatwierdź
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Aktywne konta</h3>
+                  <span>{dashboard.users.length}</span>
+                </header>
+                {dashboard.users.length ? (
+                  <div className="list-stack">
+                    {dashboard.users.map((user) => (
+                      <div key={user.id} className="list-card">
+                        <div>
+                          <strong>{user.name}</strong>
+                          <span>{user.email}</span>
+                        </div>
+                        <div className="card-actions">
+                          <span className="status-pill neutral">{user.role}</span>
+                          <button className="ghost-button" type="button" onClick={() => beginUserEdit(user)}>
+                            Edytuj
                           </button>
                           <button
                             className="danger-button"
-                            onClick={() => handleDelete("device_pairings", pairing.id, pairing.deviceName)}
                             type="button"
+                            disabled={user.id === dashboard.user.id}
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć konto ${user.email}?`)) {
+                                return;
+                              }
+                              void runMutation(
+                                async () => deleteUser(token, user.id),
+                                "Usunięto konto CMS."
+                              );
+                            }}
                           >
-                            Usuń z kolejki
+                            Usuń
                           </button>
                         </div>
-                      }
-                    />
-                  ))}
-                {!waitingPairings ? <EmptyState text="Brak urządzeń czekających na zatwierdzenie." /> : null}
-              </div>
-            </Panel>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Nie ma jeszcze żadnych kont." />
+                )}
+              </article>
+            </div>
+          </section>
+        ) : null}
 
-            <Panel title="Profil urządzenia" subtitle="Przypisanie klienta i kanału, sieć oraz zdalne akcje dla wybranego ekranu">
-              {selectedScreen ? (
-                <form className="form-grid" onSubmit={handleUpdateDeviceProfile}>
-                  <SelectField
-                    label="Urządzenie"
-                    value={selectedScreenId}
-                    onChange={setSelectedScreenId}
-                    options={dashboard.screens.map((screen) => ({
-                      value: screen.id,
-                      label: `${screen.locationLabel || screen.name} • ${screen.expand?.channel?.name || "bez kanału"}`
-                    }))}
-                    required
-                  />
-                  <TextField
-                    label="Nazwa urządzenia"
-                    value={deviceProfileForm.name}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, name: value }))
-                    }
-                    required
-                  />
-                  <SelectField
-                    label="Klient"
-                    value={deviceProfileForm.client}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, client: value }))
-                    }
-                    options={dashboard.clients.map((client) => ({
-                      value: client.id,
-                      label: client.name
-                    }))}
-                    required
-                  />
-                  <SelectField
-                    label="Kanał"
-                    value={deviceProfileForm.channel}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, channel: value }))
-                    }
-                    options={dashboard.channels
-                      .filter((channel) => !deviceProfileForm.client || channel.client === deviceProfileForm.client)
-                      .map((channel) => ({
-                        value: channel.id,
-                        label: channel.name
-                      }))}
-                    required
-                  />
-                  <TextField
-                    label="Lokalizacja"
-                    value={deviceProfileForm.locationLabel}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, locationLabel: value }))
-                    }
-                    required
-                  />
-                  <TextField
-                    label="Głośność %"
-                    value={deviceProfileForm.volumePercent}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, volumePercent: value }))
-                    }
-                    type="number"
-                    required
-                  />
-                  <SelectField
-                    label="Tryb ekranu"
-                    value={deviceProfileForm.desiredDisplayState}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({
+        {activeSection === "clients" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runMutation(
+                    async () => {
+                      if (!token) {
+                        return;
+                      }
+                      const payload = {
+                        name: clientForm.name,
+                        slug: clientForm.slug,
+                        brandColor: clientForm.brandColor
+                      };
+                      if (clientForm.id) {
+                        await updateClient(token, clientForm.id, payload);
+                      } else {
+                        await createClient(token, payload);
+                      }
+                    },
+                    clientForm.id ? "Zapisano klienta." : "Dodano klienta.",
+                    () => setClientForm(emptyClientForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{clientForm.id ? "Edytuj klienta" : "Nowy klient"}</h3>
+                  {clientForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setClientForm(emptyClientForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Nazwa" htmlFor="client-name">
+                  <input
+                    id="client-name"
+                    name="client-name"
+                    value={clientForm.name}
+                    onChange={(event) =>
+                      setClientForm((current) => ({
                         ...current,
-                        desiredDisplayState: value
+                        name: event.target.value,
+                        slug: current.id ? current.slug : toSlug(event.target.value)
                       }))
                     }
-                    options={[
-                      { value: "active", label: "Aktywny" },
-                      { value: "blackout", label: "Czarny ekran / blackout" }
-                    ]}
                     required
                   />
-                  <SelectField
-                    label="Tryb sieci"
-                    value={deviceProfileForm.networkMode}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, networkMode: value }))
-                    }
-                    options={[
-                      { value: "dhcp", label: "DHCP / automatyczny" },
-                      { value: "manual", label: "Manual / statyczny" }
-                    ]}
+                </Field>
+                <Field label="Slug" htmlFor="client-slug">
+                  <input
+                    id="client-slug"
+                    name="client-slug"
+                    value={clientForm.slug}
+                    onChange={(event) => setClientForm((current) => ({ ...current, slug: toSlug(event.target.value) }))}
                     required
                   />
-                  <TextField
-                    label="Adres IP"
-                    value={deviceProfileForm.networkAddress}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, networkAddress: value }))
-                    }
-                    placeholder="192.168.1.120"
+                </Field>
+                <Field label="Kolor marki" htmlFor="client-color">
+                  <input
+                    id="client-color"
+                    name="client-color"
+                    type="color"
+                    value={clientForm.brandColor}
+                    onChange={(event) => setClientForm((current) => ({ ...current, brandColor: event.target.value }))}
                   />
-                  <TextField
-                    label="Gateway"
-                    value={deviceProfileForm.networkGateway}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, networkGateway: value }))
-                    }
-                    placeholder="192.168.1.1"
-                  />
-                  <TextField
-                    label="DNS"
-                    value={deviceProfileForm.networkDns}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, networkDns: value }))
-                    }
-                    placeholder="1.1.1.1,8.8.8.8"
-                  />
-                  <TextField
-                    label="Wi-Fi SSID"
-                    value={deviceProfileForm.wifiSsid}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, wifiSsid: value }))
-                    }
-                    placeholder="Berry-Secure-Guest"
-                  />
-                  <TextAreaField
-                    label="Notatki sieciowe"
-                    value={deviceProfileForm.networkNotes}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, networkNotes: value }))
-                    }
-                    placeholder="Na stock Android TV te dane traktuj jako profil operacyjny. Bez uprawnień MDM aplikacja nie zmieni ich po cichu."
-                  />
-                  <TextAreaField
-                    label="Notatki urządzenia"
-                    value={deviceProfileForm.notes}
-                    onChange={(value) =>
-                      setDeviceProfileForm((current) => ({ ...current, notes: value }))
-                    }
-                    placeholder="Pilot w szufladzie recepcji, ekran 55 cali."
-                  />
-                  <button className="primary-button" type="submit">
-                    Zapisz profil
-                  </button>
-                  <div className="device-command-row">
-                    <button
-                      className="ghost-button"
-                      onClick={() => void handleQueueCommand(selectedScreen, "sync")}
-                      type="button"
-                    >
-                      Force update
-                    </button>
-                    <button
-                      className="ghost-button"
-                      onClick={() => void handleQueueCommand(selectedScreen, "capture_screenshot")}
-                      type="button"
-                    >
-                      Pobierz screenshot
-                    </button>
-                    <button
-                      className="ghost-button"
-                    onClick={() => void handleQueueCommand(selectedScreen, "restart_app")}
-                    type="button"
-                  >
-                    Restart appki
-                  </button>
-                  </div>
-                  {selectedProvisioning ? (
-                    <div className="device-meta">
-                      <span>ID urządzenia: {selectedProvisioning.pairingCode}</span>
-                      <span>Installer: {shortInstallerId(selectedProvisioning.installerId)}</span>
-                      <span>Konto: {selectedScreen.email}</span>
-                    </div>
-                  ) : null}
-                </form>
-              ) : (
-                <EmptyState text="Nie masz jeszcze żadnego urządzenia do edycji." />
-              )}
-            </Panel>
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {clientForm.id ? "Zapisz klienta" : "Dodaj klienta"}
+                </button>
+              </form>
 
-            <Panel title="Urządzenia i screenshoty" subtitle="Status online/offline, podgląd ostatniej klatki i zdalne akcje">
-              <div className="device-grid">
-                {dashboard.screens.map((screen) => (
-                  <article className="device-card" key={screen.id}>
-                    <div className="device-screenshot">
-                      {screen.lastScreenshot ? (
-                        <img
-                          alt={`Screenshot ${screen.locationLabel || screen.name}`}
-                          src={getProtectedFileUrl(screen, screen.lastScreenshot, fileToken)}
-                        />
-                      ) : (
-                        <div className="device-placeholder">
-                          <span className="eyebrow">no screenshot</span>
-                          <strong>{screen.locationLabel || screen.name}</strong>
-                          <small>Player jeszcze nie wysłał podglądu.</small>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="device-copy">
-                      <div className="device-head">
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Lista klientów</h3>
+                  <span>{clients.length}</span>
+                </header>
+                {clients.length ? (
+                  <div className="list-stack">
+                    {clients.map((client) => (
+                      <div key={client.id} className="list-card">
                         <div>
-                          <h3>{screen.locationLabel || screen.name}</h3>
-                          <p>
-                            {screen.expand?.client?.name || "Brak klienta"} •{" "}
-                            {screen.expand?.channel?.name || "Brak kanału"}
-                          </p>
+                          <strong>{client.name}</strong>
+                          <span>{client.slug}</span>
                         </div>
-                        <StatusBadge status={statusFromHeartbeat(screen)} />
+                        <div className="card-actions">
+                          <span className="color-chip" style={{ backgroundColor: client.brandColor }} />
+                          <button className="ghost-button" type="button" onClick={() => beginClientEdit(client)}>
+                            Edytuj
+                          </button>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć klienta ${client.name}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deleteClient(token, client.id), "Usunięto klienta.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
                       </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Dodaj pierwszego klienta, żeby ruszyć dalej." />
+                )}
+              </article>
+            </div>
+          </section>
+        ) : null}
 
-                      <div className="device-meta">
-                        <span>{screen.email}</span>
-                        <span>
-                          ID: {dashboard.devicePairings.find((entry) => entry.screen === screen.id)?.pairingCode || "brak"}
-                        </span>
-                        <span>IP: {screen.lastIpAddress || "brak"}</span>
-                        <span>
-                          screenshot {screen.lastScreenshotAt ? formatHeartbeat(screen.lastScreenshotAt) : "brak"}
-                        </span>
-                        <span>
-                          heartbeat {screen.lastSeenAt ? formatHeartbeat(screen.lastSeenAt) : "brak"}
-                        </span>
-                      </div>
+        {activeSection === "channels" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runMutation(
+                    async () => {
+                      if (!token) {
+                        return;
+                      }
+                      const payload = {
+                        clientId: channelForm.clientId,
+                        name: channelForm.name,
+                        slug: channelForm.slug,
+                        description: channelForm.description,
+                        orientation: channelForm.orientation
+                      };
+                      if (channelForm.id) {
+                        await updateChannel(token, channelForm.id, payload);
+                      } else {
+                        await createChannel(token, payload);
+                      }
+                    },
+                    channelForm.id ? "Zapisano kanał." : "Dodano kanał.",
+                    () => setChannelForm(emptyChannelForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{channelForm.id ? "Edytuj kanał" : "Nowy kanał"}</h3>
+                  {channelForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setChannelForm(emptyChannelForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Klient" htmlFor="channel-client">
+                  <select
+                    id="channel-client"
+                    name="channel-client"
+                    value={channelForm.clientId}
+                    onChange={(event) => setChannelForm((current) => ({ ...current, clientId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Nazwa" htmlFor="channel-name">
+                  <input
+                    id="channel-name"
+                    name="channel-name"
+                    value={channelForm.name}
+                    onChange={(event) =>
+                      setChannelForm((current) => ({
+                        ...current,
+                        name: event.target.value,
+                        slug: current.id ? current.slug : toSlug(event.target.value)
+                      }))
+                    }
+                    required
+                  />
+                </Field>
+                <Field label="Slug" htmlFor="channel-slug">
+                  <input
+                    id="channel-slug"
+                    name="channel-slug"
+                    value={channelForm.slug}
+                    onChange={(event) => setChannelForm((current) => ({ ...current, slug: toSlug(event.target.value) }))}
+                    required
+                  />
+                </Field>
+                <Field label="Orientacja" htmlFor="channel-orientation">
+                  <select
+                    id="channel-orientation"
+                    name="channel-orientation"
+                    value={channelForm.orientation}
+                    onChange={(event) =>
+                      setChannelForm((current) => ({
+                        ...current,
+                        orientation: event.target.value as "landscape" | "portrait"
+                      }))
+                    }
+                  >
+                    <option value="landscape">Landscape</option>
+                    <option value="portrait">Portrait</option>
+                  </select>
+                </Field>
+                <Field label="Opis" htmlFor="channel-description">
+                  <textarea
+                    id="channel-description"
+                    name="channel-description"
+                    rows={4}
+                    value={channelForm.description}
+                    onChange={(event) => setChannelForm((current) => ({ ...current, description: event.target.value }))}
+                  />
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {channelForm.id ? "Zapisz kanał" : "Dodaj kanał"}
+                </button>
+              </form>
 
-                      <div className="device-command-row">
-                        <button
-                          className="ghost-button"
-                          onClick={() => void handleQueueCommand(screen, "sync")}
-                          type="button"
-                        >
-                          Force update
-                        </button>
-                        <button
-                          className="ghost-button"
-                          onClick={() => void handleQueueCommand(screen, "capture_screenshot")}
-                          type="button"
-                        >
-                          Screenshot
-                        </button>
-                        <button
-                          className="ghost-button"
-                          onClick={() =>
-                            void handleQueueCommand(
-                              screen,
-                              screen.desiredDisplayState === "blackout" ? "wake" : "blackout"
-                            )
-                          }
-                          type="button"
-                        >
-                          {screen.desiredDisplayState === "blackout" ? "Włącz ekran" : "Wyłącz ekran"}
-                        </button>
-                        <button
-                          className="ghost-button"
-                          onClick={() => void handleQueueCommand(screen, "restart_app")}
-                          type="button"
-                        >
-                          Restart appki
-                        </button>
-                        <button
-                          className="danger-button"
-                          onClick={() => handleDelete("screen_users", screen.id, screen.name)}
-                          type="button"
-                        >
-                          Usuń
-                        </button>
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Lista kanałów</h3>
+                  <span>{channels.length}</span>
+                </header>
+                {channels.length ? (
+                  <div className="list-stack">
+                    {channels.map((channel) => (
+                      <div key={channel.id} className="list-card">
+                        <div>
+                          <strong>{channel.name}</strong>
+                          <span>
+                            {clientLookup.get(channel.clientId)?.name || "bez klienta"} · {channel.orientation}
+                          </span>
+                        </div>
+                        <div className="card-actions">
+                          <button className="ghost-button" type="button" onClick={() => beginChannelEdit(channel)}>
+                            Edytuj
+                          </button>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć kanał ${channel.name}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deleteChannel(token, channel.id), "Usunięto kanał.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                ))}
-                {!dashboard.screens.length ? <EmptyState text="Nie ma jeszcze żadnych urządzeń." /> : null}
-              </div>
-            </Panel>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Dodaj pierwszy kanał dla klienta." />
+                )}
+              </article>
+            </div>
           </section>
         ) : null}
 
         {activeSection === "media" ? (
-          <section className="section-grid">
-            <Panel title="Nowe media" subtitle="Wgrywanie wideo z dźwiękiem albo grafik">
-              <form className="form-grid" onSubmit={handleCreateMedia}>
-                <SelectField
-                  label="Klient"
-                  value={mediaForm.client}
-                  onChange={(value) => setMediaForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required
-                />
-                <TextField
-                  label="Tytuł"
-                  value={mediaForm.title}
-                  onChange={(value) => setMediaForm((current) => ({ ...current, title: value }))}
-                  placeholder="Wiosenna kampania 15s"
-                  required
-                />
-                <SelectField
-                  label="Typ"
-                  value={mediaForm.kind}
-                  onChange={(value) =>
-                    setMediaForm((current) => ({
-                      ...current,
-                      kind: value as "video" | "image"
-                    }))
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token || !mediaForm.file) {
+                    setFlash({ kind: "error", text: "Wybierz plik media przed wysłaniem." });
+                    return;
                   }
-                  options={[
-                    { value: "video", label: "Video" },
-                    { value: "image", label: "Image" }
-                  ]}
-                  required
-                />
-                <TextField
-                  label="Czas trwania (sekundy)"
-                  value={mediaForm.durationSeconds}
-                  onChange={(value) =>
-                    setMediaForm((current) => ({ ...current, durationSeconds: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <SelectField
-                  label="Status"
-                  value={mediaForm.status}
-                  onChange={(value) =>
-                    setMediaForm((current) => ({
-                      ...current,
-                      status: value as "draft" | "published"
-                    }))
-                  }
-                  options={[
-                    { value: "published", label: "Published" },
-                    { value: "draft", label: "Draft" }
-                  ]}
-                  required
-                />
-                <ToggleField
-                  label="Plik ma dźwięk"
-                  checked={mediaForm.hasAudio}
-                  onChange={(value) =>
-                    setMediaForm((current) => ({ ...current, hasAudio: value }))
-                  }
-                />
-                <TextField
-                  label="Tagi"
-                  value={mediaForm.tags}
-                  onChange={(value) => setMediaForm((current) => ({ ...current, tags: value }))}
-                  placeholder="promo,main-screen,spring"
-                />
-                <label className="field">
-                  <span>Plik</span>
+                  const formData = new FormData();
+                  formData.append("clientId", mediaForm.clientId);
+                  formData.append("title", mediaForm.title);
+                  formData.append("kind", mediaForm.kind);
+                  formData.append("durationSeconds", mediaForm.durationSeconds);
+                  formData.append("hasAudio", String(mediaForm.hasAudio));
+                  formData.append("status", mediaForm.status);
+                  formData.append("tags", mediaForm.tags);
+                  formData.append("file", mediaForm.file);
+                  void runMutation(
+                    async () => {
+                      await uploadMedia(token, formData);
+                    },
+                    "Plik media został dodany do biblioteki.",
+                    () => {
+                      setMediaForm(emptyMediaForm);
+                      setMediaInputKey((current) => current + 1);
+                    }
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>Dodaj plik</h3>
+                  <span>jeden backend, jeden storage</span>
+                </header>
+                <Field label="Klient" htmlFor="media-client">
+                  <select
+                    id="media-client"
+                    name="media-client"
+                    value={mediaForm.clientId}
+                    onChange={(event) => setMediaForm((current) => ({ ...current, clientId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Tytuł" htmlFor="media-title">
                   <input
-                    id="media-upload-file"
-                    name="mediaFile"
+                    id="media-title"
+                    name="media-title"
+                    value={mediaForm.title}
+                    onChange={(event) => setMediaForm((current) => ({ ...current, title: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Typ" htmlFor="media-kind">
+                    <select
+                      id="media-kind"
+                      name="media-kind"
+                      value={mediaForm.kind}
+                      onChange={(event) =>
+                        setMediaForm((current) => ({ ...current, kind: event.target.value as "video" | "image" }))
+                      }
+                    >
+                      <option value="video">Video</option>
+                      <option value="image">Obraz</option>
+                    </select>
+                  </Field>
+                  <Field label="Sekundy" htmlFor="media-duration">
+                    <input
+                      id="media-duration"
+                      name="media-duration"
+                      type="number"
+                      min="1"
+                      value={mediaForm.durationSeconds}
+                      onChange={(event) => setMediaForm((current) => ({ ...current, durationSeconds: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <div className="inline-grid">
+                  <Field label="Status" htmlFor="media-status">
+                    <select
+                      id="media-status"
+                      name="media-status"
+                      value={mediaForm.status}
+                      onChange={(event) =>
+                        setMediaForm((current) => ({
+                          ...current,
+                          status: event.target.value as "draft" | "published"
+                        }))
+                      }
+                    >
+                      <option value="published">Published</option>
+                      <option value="draft">Draft</option>
+                    </select>
+                  </Field>
+                  <Field label="Audio" htmlFor="media-audio">
+                    <select
+                      id="media-audio"
+                      name="media-audio"
+                      value={mediaForm.hasAudio ? "yes" : "no"}
+                      onChange={(event) =>
+                        setMediaForm((current) => ({ ...current, hasAudio: event.target.value === "yes" }))
+                      }
+                    >
+                      <option value="yes">Tak</option>
+                      <option value="no">Nie</option>
+                    </select>
+                  </Field>
+                </div>
+                <Field label="Tagi" htmlFor="media-tags">
+                  <input
+                    id="media-tags"
+                    name="media-tags"
+                    value={mediaForm.tags}
+                    onChange={(event) => setMediaForm((current) => ({ ...current, tags: event.target.value }))}
+                    placeholder="promo, menu, hero"
+                  />
+                </Field>
+                <Field label="Plik" htmlFor="media-file">
+                  <input
+                    key={mediaInputKey}
+                    id="media-file"
+                    name="media-file"
                     type="file"
                     accept="video/*,image/*"
                     onChange={(event) =>
-                      void handleMediaFileSelection(event.target.files?.[0] ?? null)
+                      setMediaForm((current) => ({ ...current, file: event.target.files?.[0] || null }))
                     }
                     required
                   />
-                </label>
-                <button className="primary-button" type="submit">
-                  Wgraj media
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  Dodaj media
                 </button>
               </form>
-            </Panel>
 
-            <Panel title="Biblioteka media" subtitle="Assety gotowe do playlist i schedule">
-              <div className="card-grid">
-                {dashboard.mediaAssets.map((asset) => (
-                  <article className="media-card" key={asset.id}>
-                    <div className="media-preview">
-                      {asset.kind === "video" ? (
-                        <video
-                          src={getProtectedFileUrl(asset, asset.asset, fileToken)}
-                          muted
-                          playsInline
-                          preload="metadata"
-                        />
-                      ) : (
-                        <img alt={asset.title} src={getProtectedFileUrl(asset, asset.asset, fileToken)} />
-                      )}
-                    </div>
-                    <div className="media-copy">
-                      <h3>{asset.title}</h3>
-                      <p>
-                        {asset.expand?.client?.name || "Brak klienta"} • {asset.durationSeconds || 0}s •{" "}
-                        {asset.hasAudio ? "z dźwiękiem" : "bez dźwięku"}
-                      </p>
-                      <div className="media-tags">
-                        <span className="soft-badge">{asset.kind}</span>
-                        <span className="soft-badge">{asset.status}</span>
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Biblioteka</h3>
+                  <span>{media.length}</span>
+                </header>
+                {media.length ? (
+                  <div className="list-stack">
+                    {media.map((entry) => (
+                      <div key={entry.id} className="list-card">
+                        <div>
+                          <strong>{entry.title}</strong>
+                          <span>
+                            {clientLookup.get(entry.clientId)?.name || "bez klienta"} · {entry.kind} · {entry.status}
+                          </span>
+                          <small>{entry.originalName}</small>
+                        </div>
+                        <div className="card-actions">
+                          <a className="ghost-button" href={entry.url} target="_blank" rel="noreferrer">
+                            Otwórz
+                          </a>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć plik ${entry.title}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deleteMedia(token, entry.id), "Usunięto media.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                    <button
-                      className="danger-button"
-                      onClick={() => handleDelete("media_assets", asset.id, asset.title)}
-                      type="button"
-                    >
-                      Usuń
-                    </button>
-                  </article>
-                ))}
-                {!dashboard.mediaAssets.length ? (
-                  <EmptyState text="Biblioteka mediów jest jeszcze pusta." />
-                ) : null}
-              </div>
-            </Panel>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Biblioteka jest pusta. Wrzuć pierwszy plik video albo obraz." />
+                )}
+              </article>
+            </div>
           </section>
         ) : null}
 
         {activeSection === "playlists" ? (
-          <section className="section-grid">
-            <Panel title="Nowa playlista" subtitle="Zbiór mediów pod konkretny kanał lub klienta">
-              <form className="form-grid" onSubmit={handleCreatePlaylist}>
-                <SelectField
-                  label="Klient"
-                  value={playlistForm.client}
-                  onChange={(value) => setPlaylistForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required
-                />
-                <SelectField
-                  label="Kanał"
-                  value={playlistForm.channel}
-                  onChange={(value) =>
-                    setPlaylistForm((current) => ({ ...current, channel: value }))
-                  }
-                  options={[
-                    { value: "", label: "Brak przypięcia na sztywno" },
-                    ...dashboard.channels
-                      .filter((channel) => !playlistForm.client || channel.client === playlistForm.client)
-                      .map((channel) => ({
-                        value: channel.id,
-                        label: channel.name
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runMutation(
+                    async () => {
+                      if (!token) {
+                        return;
+                      }
+                      const payload = {
+                        clientId: playlistForm.clientId,
+                        channelId: playlistForm.channelId,
+                        name: playlistForm.name,
+                        isActive: playlistForm.isActive,
+                        notes: playlistForm.notes
+                      };
+                      if (playlistForm.id) {
+                        await updatePlaylist(token, playlistForm.id, payload);
+                      } else {
+                        await createPlaylist(token, payload);
+                      }
+                    },
+                    playlistForm.id ? "Zapisano playlistę." : "Dodano playlistę.",
+                    () => setPlaylistForm(emptyPlaylistForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{playlistForm.id ? "Edytuj playlistę" : "Nowa playlista"}</h3>
+                  {playlistForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setPlaylistForm(emptyPlaylistForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Klient" htmlFor="playlist-client">
+                  <select
+                    id="playlist-client"
+                    name="playlist-client"
+                    value={playlistForm.clientId}
+                    onChange={(event) =>
+                      setPlaylistForm((current) => ({
+                        ...current,
+                        clientId: event.target.value,
+                        channelId: ""
                       }))
-                  ]}
-                />
-                <TextField
-                  label="Nazwa"
-                  value={playlistForm.name}
-                  onChange={(value) => setPlaylistForm((current) => ({ ...current, name: value }))}
-                  placeholder="Main lobby loop"
-                  required
-                />
-                <TextAreaField
-                  label="Notatki"
-                  value={playlistForm.notes}
-                  onChange={(value) => setPlaylistForm((current) => ({ ...current, notes: value }))}
-                  placeholder="Loop na wejście główne i ekran sprzedażowy."
-                />
-                <ToggleField
-                  label="Aktywna"
-                  checked={playlistForm.isActive}
-                  onChange={(value) =>
-                    setPlaylistForm((current) => ({ ...current, isActive: value }))
-                  }
-                />
-                <button className="primary-button" type="submit">
-                  Dodaj playlistę
+                    }
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Kanał" htmlFor="playlist-channel">
+                  <select
+                    id="playlist-channel"
+                    name="playlist-channel"
+                    value={playlistForm.channelId}
+                    onChange={(event) => setPlaylistForm((current) => ({ ...current, channelId: event.target.value }))}
+                  >
+                    <option value="">Kanał opcjonalny</option>
+                    {filteredChannelsForPlaylist.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Nazwa playlisty" htmlFor="playlist-name">
+                  <input
+                    id="playlist-name"
+                    name="playlist-name"
+                    value={playlistForm.name}
+                    onChange={(event) => setPlaylistForm((current) => ({ ...current, name: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <Field label="Notatki" htmlFor="playlist-notes">
+                  <textarea
+                    id="playlist-notes"
+                    name="playlist-notes"
+                    rows={4}
+                    value={playlistForm.notes}
+                    onChange={(event) => setPlaylistForm((current) => ({ ...current, notes: event.target.value }))}
+                  />
+                </Field>
+                <label className="checkbox-row" htmlFor="playlist-active">
+                  <input
+                    id="playlist-active"
+                    name="playlist-active"
+                    type="checkbox"
+                    checked={playlistForm.isActive}
+                    onChange={(event) => setPlaylistForm((current) => ({ ...current, isActive: event.target.checked }))}
+                  />
+                  <span>Playlista aktywna</span>
+                </label>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {playlistForm.id ? "Zapisz playlistę" : "Dodaj playlistę"}
                 </button>
               </form>
-            </Panel>
 
-            <Panel title="Dodaj element do playlisty" subtitle="Kolejność, loop i poziom głośności">
-              <form className="form-grid" onSubmit={handleCreatePlaylistItem}>
-                <SelectField
-                  label="Playlista"
-                  value={playlistItemForm.playlist}
-                  onChange={(value) =>
-                    setPlaylistItemForm((current) => ({ ...current, playlist: value }))
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token) {
+                    return;
                   }
-                  options={dashboard.playlists.map((playlist) => ({
-                    value: playlist.id,
-                    label: playlist.name
-                  }))}
-                  required
-                />
-                <SelectField
-                  label="Media"
-                  value={playlistItemForm.mediaAsset}
-                  onChange={(value) =>
-                    setPlaylistItemForm((current) => ({ ...current, mediaAsset: value }))
-                  }
-                  options={dashboard.mediaAssets.map((asset) => ({
-                    value: asset.id,
-                    label: asset.title
-                  }))}
-                  required
-                />
-                <TextField
-                  label="Sort order"
-                  value={playlistItemForm.sortOrder}
-                  onChange={(value) =>
-                    setPlaylistItemForm((current) => ({ ...current, sortOrder: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <TextField
-                  label="Loop count"
-                  value={playlistItemForm.loopCount}
-                  onChange={(value) =>
-                    setPlaylistItemForm((current) => ({ ...current, loopCount: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <TextField
-                  label="Głośność %"
-                  value={playlistItemForm.volumePercent}
-                  onChange={(value) =>
-                    setPlaylistItemForm((current) => ({ ...current, volumePercent: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <button className="primary-button" type="submit">
+                  void runMutation(
+                    async () => {
+                      await createPlaylistItem(token, playlistItemForm.playlistId, {
+                        mediaId: playlistItemForm.mediaId,
+                        sortOrder: Number(playlistItemForm.sortOrder || 10),
+                        loopCount: Number(playlistItemForm.loopCount || 1),
+                        volumePercent: Number(playlistItemForm.volumePercent || 100)
+                      });
+                    },
+                    "Dodano materiał do playlisty.",
+                    () => setPlaylistItemForm(emptyPlaylistItemForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>Dodaj element do playlisty</h3>
+                  <span>bezpośrednio z biblioteki</span>
+                </header>
+                <Field label="Playlista" htmlFor="playlist-item-playlist">
+                  <select
+                    id="playlist-item-playlist"
+                    name="playlist-item-playlist"
+                    value={playlistItemForm.playlistId}
+                    onChange={(event) =>
+                      setPlaylistItemForm((current) => ({ ...current, playlistId: event.target.value }))
+                    }
+                    required
+                  >
+                    <option value="">Wybierz playlistę</option>
+                    {playlists.map((playlist) => (
+                      <option key={playlist.id} value={playlist.id}>
+                        {playlist.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Media" htmlFor="playlist-item-media">
+                  <select
+                    id="playlist-item-media"
+                    name="playlist-item-media"
+                    value={playlistItemForm.mediaId}
+                    onChange={(event) => setPlaylistItemForm((current) => ({ ...current, mediaId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz media</option>
+                    {media.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.title}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="inline-grid triple">
+                  <Field label="Sort" htmlFor="playlist-item-sort">
+                    <input
+                      id="playlist-item-sort"
+                      name="playlist-item-sort"
+                      type="number"
+                      value={playlistItemForm.sortOrder}
+                      onChange={(event) => setPlaylistItemForm((current) => ({ ...current, sortOrder: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Loop" htmlFor="playlist-item-loop">
+                    <input
+                      id="playlist-item-loop"
+                      name="playlist-item-loop"
+                      type="number"
+                      min="1"
+                      value={playlistItemForm.loopCount}
+                      onChange={(event) => setPlaylistItemForm((current) => ({ ...current, loopCount: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Głośność" htmlFor="playlist-item-volume">
+                    <input
+                      id="playlist-item-volume"
+                      name="playlist-item-volume"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={playlistItemForm.volumePercent}
+                      onChange={(event) =>
+                        setPlaylistItemForm((current) => ({ ...current, volumePercent: event.target.value }))
+                      }
+                    />
+                  </Field>
+                </div>
+                <button className="primary-button" type="submit" disabled={submitting}>
                   Dodaj element
                 </button>
               </form>
-            </Panel>
+            </div>
 
-            <Panel title="Playlisty" subtitle="Pełna zawartość i kolejność emisji">
-              <div className="card-grid playlist-grid">
-                {playlistCards.map(({ playlist, items }) => (
-                  <article className="playlist-card" key={playlist.id}>
-                    <div className="playlist-head">
-                      <div>
-                        <h3>{playlist.name}</h3>
-                        <p>
-                          {playlist.expand?.client?.name || "Brak klienta"}
-                          {playlist.expand?.channel ? ` • ${playlist.expand.channel.name}` : ""}
-                        </p>
-                      </div>
-                      <span className={playlist.isActive ? "status-dot success" : "status-dot idle"}>
-                        {playlist.isActive ? "active" : "paused"}
-                      </span>
-                    </div>
-
-                    <div className="playlist-items">
-                      {items.map((item) => (
-                        <div className="playlist-item-line" key={item.id}>
-                          <strong>{item.expand?.mediaAsset?.title || "Brak media"}</strong>
+            <article className="panel">
+              <header className="panel-header">
+                <h3>Wszystkie playlisty</h3>
+                <span>{playlists.length}</span>
+              </header>
+              {playlists.length ? (
+                <div className="list-stack">
+                  {playlists.map((playlist) => (
+                    <div key={playlist.id} className="playlist-card">
+                      <div className="playlist-card-header">
+                        <div>
+                          <strong>{playlist.name}</strong>
                           <span>
-                            #{item.sortOrder} • x{item.loopCount} • vol {item.volumePercent}%
+                            {clientLookup.get(playlist.clientId)?.name || "bez klienta"} ·{" "}
+                            {channelLookup.get(playlist.channelId)?.name || "fallback kanał"}
                           </span>
+                        </div>
+                        <div className="card-actions">
+                          <span className={`status-pill ${playlist.isActive ? "online" : "offline"}`}>
+                            {playlist.isActive ? "active" : "paused"}
+                          </span>
+                          <button className="ghost-button" type="button" onClick={() => beginPlaylistEdit(playlist)}>
+                            Edytuj
+                          </button>
                           <button
-                            className="mini-danger"
-                            onClick={() =>
-                              handleDelete("playlist_items", item.id, item.expand?.mediaAsset?.title || "element")
-                            }
+                            className="danger-button"
                             type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć playlistę ${playlist.name}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deletePlaylist(token, playlist.id), "Usunięto playlistę.");
+                            }}
                           >
-                            usuń
+                            Usuń
                           </button>
                         </div>
-                      ))}
-                      {!items.length ? <EmptyState text="Ta playlista nie ma jeszcze żadnych pozycji." /> : null}
+                      </div>
+                      {playlist.items.length ? (
+                        <div className="playlist-items">
+                          {playlist.items.map((item) => (
+                            <div key={item.id} className="playlist-item-row">
+                              <div>
+                                <strong>{item.media?.title || mediaLookup.get(item.mediaId)?.title || "Brak media"}</strong>
+                                <span>
+                                  sort {item.sortOrder} · loop {item.loopCount} · vol {item.volumePercent}
+                                </span>
+                              </div>
+                              <button
+                                className="ghost-button"
+                                type="button"
+                                onClick={() => {
+                                  if (!token || !window.confirm("Usunąć ten element playlisty?")) {
+                                    return;
+                                  }
+                                  void runMutation(
+                                    async () => deletePlaylistItem(token, playlist.id, item.id),
+                                    "Usunięto element playlisty."
+                                  );
+                                }}
+                              >
+                                Usuń
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <EmptyState text="Ta playlista jest jeszcze pusta." />
+                      )}
                     </div>
-
-                    <button
-                      className="danger-button"
-                      onClick={() => handleDelete("playlists", playlist.id, playlist.name)}
-                      type="button"
-                    >
-                      Usuń playlistę
-                    </button>
-                  </article>
-                ))}
-                {!playlistCards.length ? <EmptyState text="Nie utworzono jeszcze żadnych playlist." /> : null}
-              </div>
-            </Panel>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState text="Stwórz pierwszą playlistę i dodaj do niej media." />
+              )}
+            </article>
           </section>
         ) : null}
 
         {activeSection === "schedule" ? (
-          <section className="section-grid">
-            <Panel
-              title={editingScheduleId ? "Edycja reguły harmonogramu" : "Nowa reguła harmonogramu"}
-              subtitle="To ona mówi playerowi co ma grać i kiedy"
-            >
-              <form className="form-grid" onSubmit={handleCreateSchedule}>
-                <SelectField
-                  label="Klient"
-                  value={scheduleForm.client}
-                  onChange={(value) => setScheduleForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required
-                />
-                <SelectField
-                  label="Kanał"
-                  value={scheduleForm.channel}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, channel: value }))
-                  }
-                  options={dashboard.channels
-                    .filter((channel) => !scheduleForm.client || channel.client === scheduleForm.client)
-                    .map((channel) => ({
-                      value: channel.id,
-                      label: channel.name
-                    }))}
-                  required
-                />
-                <SelectField
-                  label="Playlista"
-                  value={scheduleForm.playlist}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, playlist: value }))
-                  }
-                  options={dashboard.playlists
-                    .filter((playlist) => !scheduleForm.client || playlist.client === scheduleForm.client)
-                    .map((playlist) => ({
-                      value: playlist.id,
-                      label: playlist.name
-                    }))}
-                  required
-                />
-                <TextField
-                  label="Etykieta"
-                  value={scheduleForm.label}
-                  onChange={(value) => setScheduleForm((current) => ({ ...current, label: value }))}
-                  placeholder="Weekday morning loop"
-                  required
-                />
-                <TextField
-                  label="Start daty"
-                  value={scheduleForm.startDate}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, startDate: value }))
-                  }
-                  type="date"
-                />
-                <TextField
-                  label="Koniec daty"
-                  value={scheduleForm.endDate}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, endDate: value }))
-                  }
-                  type="date"
-                />
-                <TextField
-                  label="Start godziny"
-                  value={scheduleForm.startTime}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, startTime: value }))
-                  }
-                  type="time"
-                  required
-                />
-                <TextField
-                  label="Koniec godziny"
-                  value={scheduleForm.endTime}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, endTime: value }))
-                  }
-                  type="time"
-                  required
-                />
-                <TextField
-                  label="Dni tygodnia"
-                  value={scheduleForm.daysOfWeek}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, daysOfWeek: value }))
-                  }
-                  placeholder="1,2,3,4,5"
-                  required
-                />
-                <TextField
-                  label="Priorytet"
-                  value={scheduleForm.priority}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, priority: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <ToggleField
-                  label="Aktywna"
-                  checked={scheduleForm.isActive}
-                  onChange={(value) =>
-                    setScheduleForm((current) => ({ ...current, isActive: value }))
-                  }
-                />
-                <button className="primary-button" type="submit">
-                  {editingScheduleId ? "Zapisz zmiany" : "Dodaj regułę"}
-                </button>
-                {editingScheduleId ? (
-                  <button
-                    className="ghost-button"
-                    onClick={() => resetScheduleEditor(setScheduleForm, setEditingScheduleId)}
-                    type="button"
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runMutation(
+                    async () => {
+                      if (!token) {
+                        return;
+                      }
+                      const payload = {
+                        clientId: scheduleForm.clientId,
+                        channelId: scheduleForm.channelId,
+                        playlistId: scheduleForm.playlistId,
+                        label: scheduleForm.label,
+                        startDate: scheduleForm.startDate,
+                        endDate: scheduleForm.endDate,
+                        startTime: scheduleForm.startTime,
+                        endTime: scheduleForm.endTime,
+                        daysOfWeek: scheduleForm.daysOfWeek,
+                        priority: Number(scheduleForm.priority || 100),
+                        isActive: scheduleForm.isActive
+                      };
+                      if (scheduleForm.id) {
+                        await updateSchedule(token, scheduleForm.id, payload);
+                      } else {
+                        await createSchedule(token, payload);
+                      }
+                    },
+                    scheduleForm.id ? "Zapisano harmonogram." : "Dodano harmonogram.",
+                    () => setScheduleForm(emptyScheduleForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{scheduleForm.id ? "Edytuj harmonogram" : "Nowy harmonogram"}</h3>
+                  {scheduleForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setScheduleForm(emptyScheduleForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Klient" htmlFor="schedule-client">
+                  <select
+                    id="schedule-client"
+                    name="schedule-client"
+                    value={scheduleForm.clientId}
+                    onChange={(event) =>
+                      setScheduleForm((current) => ({
+                        ...current,
+                        clientId: event.target.value,
+                        channelId: "",
+                        playlistId: ""
+                      }))
+                    }
+                    required
                   >
-                    Anuluj edycję
-                  </button>
-                ) : null}
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Kanał" htmlFor="schedule-channel">
+                  <select
+                    id="schedule-channel"
+                    name="schedule-channel"
+                    value={scheduleForm.channelId}
+                    onChange={(event) =>
+                      setScheduleForm((current) => ({
+                        ...current,
+                        channelId: event.target.value,
+                        playlistId: ""
+                      }))
+                    }
+                    required
+                  >
+                    <option value="">Wybierz kanał</option>
+                    {filteredChannelsForSchedule.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Playlista" htmlFor="schedule-playlist">
+                  <select
+                    id="schedule-playlist"
+                    name="schedule-playlist"
+                    value={scheduleForm.playlistId}
+                    onChange={(event) => setScheduleForm((current) => ({ ...current, playlistId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz playlistę</option>
+                    {filteredPlaylistsForSchedule.map((playlist) => (
+                      <option key={playlist.id} value={playlist.id}>
+                        {playlist.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Etykieta" htmlFor="schedule-label">
+                  <input
+                    id="schedule-label"
+                    name="schedule-label"
+                    value={scheduleForm.label}
+                    onChange={(event) => setScheduleForm((current) => ({ ...current, label: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Data startu" htmlFor="schedule-start-date">
+                    <input
+                      id="schedule-start-date"
+                      name="schedule-start-date"
+                      type="date"
+                      value={scheduleForm.startDate}
+                      onChange={(event) => setScheduleForm((current) => ({ ...current, startDate: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Data końca" htmlFor="schedule-end-date">
+                    <input
+                      id="schedule-end-date"
+                      name="schedule-end-date"
+                      type="date"
+                      value={scheduleForm.endDate}
+                      onChange={(event) => setScheduleForm((current) => ({ ...current, endDate: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <div className="inline-grid triple">
+                  <Field label="Start" htmlFor="schedule-start-time">
+                    <input
+                      id="schedule-start-time"
+                      name="schedule-start-time"
+                      type="time"
+                      value={scheduleForm.startTime}
+                      onChange={(event) => setScheduleForm((current) => ({ ...current, startTime: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Koniec" htmlFor="schedule-end-time">
+                    <input
+                      id="schedule-end-time"
+                      name="schedule-end-time"
+                      type="time"
+                      value={scheduleForm.endTime}
+                      onChange={(event) => setScheduleForm((current) => ({ ...current, endTime: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Priorytet" htmlFor="schedule-priority">
+                    <input
+                      id="schedule-priority"
+                      name="schedule-priority"
+                      type="number"
+                      value={scheduleForm.priority}
+                      onChange={(event) => setScheduleForm((current) => ({ ...current, priority: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <fieldset className="days-fieldset">
+                  <legend>Dni tygodnia</legend>
+                  <div className="day-toggle-grid">
+                    {weekdayOptions.map((option) => {
+                      const checked = scheduleForm.daysOfWeek
+                        .split(",")
+                        .map((value) => Number(value))
+                        .includes(option.value);
+                      return (
+                        <label key={option.value} className={`day-pill ${checked ? "active" : ""}`}>
+                          <input
+                            type="checkbox"
+                            name={`weekday-${option.value}`}
+                            checked={checked}
+                            onChange={() => toggleScheduleDay(option.value)}
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+                <label className="checkbox-row" htmlFor="schedule-active">
+                  <input
+                    id="schedule-active"
+                    name="schedule-active"
+                    type="checkbox"
+                    checked={scheduleForm.isActive}
+                    onChange={(event) => setScheduleForm((current) => ({ ...current, isActive: event.target.checked }))}
+                  />
+                  <span>Harmonogram aktywny</span>
+                </label>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {scheduleForm.id ? "Zapisz harmonogram" : "Dodaj harmonogram"}
+                </button>
               </form>
-            </Panel>
 
-            <Panel title="Reguły harmonogramu" subtitle="Najwyższy priorytet wygrywa na danym kanale">
-              <div className="list-stack">
-                {dashboard.schedules.map((schedule) => (
-                  <RecordRow
-                    key={schedule.id}
-                    title={schedule.label}
-                    subtitle={`${schedule.expand?.channel?.name || "Brak kanału"} • ${
-                      schedule.expand?.playlist?.name || "Brak playlisty"
-                    }`}
-                    meta={`${schedule.daysOfWeek || "all days"} • ${schedule.startTime} → ${schedule.endTime}`}
-                    badge={<PriorityBadge value={schedule.priority} />}
-                    action={
-                      <div className="device-command-row">
-                        <button
-                          className="ghost-button"
-                          onClick={() => {
-                            setEditingScheduleId(schedule.id);
-                            setScheduleForm(toScheduleForm(schedule));
-                          }}
-                          type="button"
-                        >
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Aktywne i zapisane reguły</h3>
+                  <span>{schedules.length}</span>
+                </header>
+                {schedules.length ? (
+                  <div className="list-stack">
+                    {schedules.map((schedule) => (
+                      <div key={schedule.id} className="list-card">
+                        <div>
+                          <strong>{schedule.label}</strong>
+                          <span>
+                            {channelLookup.get(schedule.channelId)?.name || "bez kanału"} ·{" "}
+                            {playlists.find((playlist) => playlist.id === schedule.playlistId)?.name || "bez playlisty"}
+                          </span>
+                          <small>
+                            {schedule.startTime} - {schedule.endTime} · dni {schedule.daysOfWeek || "0,1,2,3,4,5,6"}
+                          </small>
+                        </div>
+                        <div className="card-actions">
+                          <span className={`status-pill ${schedule.isActive ? "online" : "offline"}`}>
+                            {schedule.isActive ? "active" : "paused"}
+                          </span>
+                          <button className="ghost-button" type="button" onClick={() => beginScheduleEdit(schedule)}>
+                            Edytuj
+                          </button>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć harmonogram ${schedule.label}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deleteSchedule(token, schedule.id), "Usunięto harmonogram.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Dodaj harmonogram albo zostaw fallback do pierwszej aktywnej playlisty." />
+                )}
+              </article>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "devices" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token) {
+                    return;
+                  }
+                  const payload = {
+                    name: deviceForm.name,
+                    clientId: deviceForm.clientId,
+                    channelId: deviceForm.channelId,
+                    locationLabel: deviceForm.locationLabel,
+                    notes: deviceForm.notes,
+                    desiredDisplayState: deviceForm.desiredDisplayState,
+                    volumePercent: Number(deviceForm.volumePercent || 80)
+                  };
+
+                  const successText =
+                    pendingDevices.some((device) => device.id === deviceForm.id) || !approvedDevices.some((device) => device.id === deviceForm.id)
+                      ? "Urządzenie zostało zatwierdzone."
+                      : "Zapisano zmiany urządzenia.";
+
+                  void runMutation(
+                    async () => {
+                      if (pendingDevices.some((device) => device.id === deviceForm.id)) {
+                        await approveDevice(token, {
+                          deviceId: deviceForm.id,
+                          serial: deviceForm.serial,
+                          ...payload
+                        });
+                      } else {
+                        await updateDevice(token, deviceForm.id, payload);
+                      }
+                    },
+                    successText,
+                    () => setDeviceForm(emptyDeviceForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>
+                    {pendingDevices.some((device) => device.id === deviceForm.id)
+                      ? "Zatwierdź urządzenie"
+                      : deviceForm.id
+                        ? "Edytuj urządzenie"
+                        : "Wybierz urządzenie z kolejki"}
+                  </h3>
+                  {deviceForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setDeviceForm(emptyDeviceForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Numer seryjny" htmlFor="device-serial">
+                  <input id="device-serial" name="device-serial" value={deviceForm.serial} readOnly />
+                </Field>
+                <Field label="Nazwa w CMS" htmlFor="device-name">
+                  <input
+                    id="device-name"
+                    name="device-name"
+                    value={deviceForm.name}
+                    onChange={(event) => setDeviceForm((current) => ({ ...current, name: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <Field label="Klient" htmlFor="device-client">
+                  <select
+                    id="device-client"
+                    name="device-client"
+                    value={deviceForm.clientId}
+                    onChange={(event) =>
+                      setDeviceForm((current) => ({
+                        ...current,
+                        clientId: event.target.value,
+                        channelId: ""
+                      }))
+                    }
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Kanał" htmlFor="device-channel">
+                  <select
+                    id="device-channel"
+                    name="device-channel"
+                    value={deviceForm.channelId}
+                    onChange={(event) => setDeviceForm((current) => ({ ...current, channelId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz kanał</option>
+                    {filteredChannelsForDevice.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Lokalizacja / opis" htmlFor="device-location">
+                  <input
+                    id="device-location"
+                    name="device-location"
+                    value={deviceForm.locationLabel}
+                    onChange={(event) => setDeviceForm((current) => ({ ...current, locationLabel: event.target.value }))}
+                  />
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Tryb ekranu" htmlFor="device-display-state">
+                    <select
+                      id="device-display-state"
+                      name="device-display-state"
+                      value={deviceForm.desiredDisplayState}
+                      onChange={(event) =>
+                        setDeviceForm((current) => ({
+                          ...current,
+                          desiredDisplayState: event.target.value as "active" | "blackout"
+                        }))
+                      }
+                    >
+                      <option value="active">Active</option>
+                      <option value="blackout">Blackout</option>
+                    </select>
+                  </Field>
+                  <Field label="Głośność %" htmlFor="device-volume">
+                    <input
+                      id="device-volume"
+                      name="device-volume"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={deviceForm.volumePercent}
+                      onChange={(event) => setDeviceForm((current) => ({ ...current, volumePercent: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <Field label="Notatki" htmlFor="device-notes">
+                  <textarea
+                    id="device-notes"
+                    name="device-notes"
+                    rows={4}
+                    value={deviceForm.notes}
+                    onChange={(event) => setDeviceForm((current) => ({ ...current, notes: event.target.value }))}
+                  />
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting || !deviceForm.id}>
+                  {pendingDevices.some((device) => device.id === deviceForm.id) ? "Zatwierdź urządzenie" : "Zapisz zmiany"}
+                </button>
+              </form>
+
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Kolejka oczekujących</h3>
+                  <span>{pendingDevices.length}</span>
+                </header>
+                {pendingDevices.length ? (
+                  <div className="list-stack">
+                    {pendingDevices.map((device) => (
+                      <button key={device.id} className="list-card interactive" type="button" onClick={() => beginDeviceApproval(device)}>
+                        <div>
+                          <strong>{device.serial}</strong>
+                          <span>{device.deviceModel}</span>
+                          <small>{device.playerMessage || "Czeka na approval."}</small>
+                        </div>
+                        <div className="align-right">
+                          <span className="status-pill pending">{device.playerState}</span>
+                          <small>{formatDateTime(device.lastSeenAt)}</small>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Żadne nowe urządzenie nie czeka teraz na approval." />
+                )}
+              </article>
+            </div>
+
+            <article className="panel">
+              <header className="panel-header">
+                <h3>Zatwierdzone urządzenia</h3>
+                <span>{approvedDevices.length}</span>
+              </header>
+              {approvedDevices.length ? (
+                <div className="list-stack">
+                  {approvedDevices.map((device) => (
+                    <div key={device.id} className="device-card">
+                      <div className="device-card-main">
+                        <div>
+                          <strong>{device.name}</strong>
+                          <span>
+                            {device.serial} · {device.clientName || "bez klienta"} · {device.channelName || "bez kanału"}
+                          </span>
+                          <small>
+                            {device.playerMessage || "Brak komunikatu od playera."}
+                            {device.activeItemTitle ? ` · aktualnie: ${device.activeItemTitle}` : ""}
+                          </small>
+                        </div>
+                        <div className="device-meta">
+                          <span className={`status-pill ${device.online ? "online" : "offline"}`}>
+                            {device.online ? "online" : "offline"}
+                          </span>
+                          <span className="status-pill neutral">{device.playerState}</span>
+                          <small>APK {device.appVersion || "brak"}</small>
+                        </div>
+                      </div>
+                      <div className="card-actions">
+                        <button className="ghost-button" type="button" onClick={() => beginDeviceEdit(device)}>
                           Edytuj
                         </button>
                         <button
-                          className="danger-button"
-                          onClick={() => handleDelete("schedule_rules", schedule.id, schedule.label)}
+                          className="ghost-button"
                           type="button"
+                          onClick={() => {
+                            if (!token || !window.confirm(`Zresetować approval urządzenia ${device.name}?`)) {
+                              return;
+                            }
+                            void runMutation(async () => resetDevice(token, device.id), "Urządzenie wróciło do kolejki pending.");
+                          }}
+                        >
+                          Reset / rozłącz
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => {
+                            if (!token || !window.confirm(`Usunąć urządzenie ${device.name}?`)) {
+                              return;
+                            }
+                            void runMutation(async () => deleteDevice(token, device.id), "Usunięto urządzenie.");
+                          }}
                         >
                           Usuń
                         </button>
                       </div>
-                    }
-                  />
-                ))}
-                {!dashboard.schedules.length ? <EmptyState text="Brak reguł schedulingowych." /> : null}
-              </div>
-            </Panel>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState text="Jeszcze żadne urządzenie nie zostało zatwierdzone." />
+              )}
+            </article>
           </section>
         ) : null}
 
-        {activeSection === "events" ? (
-          <section className="section-grid">
-            <Panel title="Nowy event override" subtitle="Na przykład pilny komunikat, specjalna emisja lub takeover">
-              <form className="form-grid" onSubmit={handleCreateEvent}>
-                <SelectField
-                  label="Klient"
-                  value={eventForm.client}
-                  onChange={(value) => setEventForm((current) => ({ ...current, client: value }))}
-                  options={dashboard.clients.map((client) => ({
-                    value: client.id,
-                    label: client.name
-                  }))}
-                  required
-                />
-                <SelectField
-                  label="Kanał"
-                  value={eventForm.channel}
-                  onChange={(value) => setEventForm((current) => ({ ...current, channel: value }))}
-                  options={[
-                    { value: "", label: "Wszystkie kanały klienta" },
-                    ...dashboard.channels
-                      .filter((channel) => !eventForm.client || channel.client === eventForm.client)
-                      .map((channel) => ({
-                        value: channel.id,
-                        label: channel.name
-                      }))
-                  ]}
-                />
-                <SelectField
-                  label="Ekran"
-                  value={eventForm.screen}
-                  onChange={(value) => setEventForm((current) => ({ ...current, screen: value }))}
-                  options={[
-                    { value: "", label: "Wszystkie ekrany z kanału" },
-                    ...dashboard.screens
-                      .filter((screen) => !eventForm.client || screen.client === eventForm.client)
-                      .map((screen) => ({
-                        value: screen.id,
-                        label: screen.locationLabel || screen.name
-                      }))
-                  ]}
-                />
-                <SelectField
-                  label="Playlista override"
-                  value={eventForm.playlist}
-                  onChange={(value) => setEventForm((current) => ({ ...current, playlist: value }))}
-                  options={dashboard.playlists
-                    .filter((playlist) => !eventForm.client || playlist.client === eventForm.client)
-                    .map((playlist) => ({
-                      value: playlist.id,
-                      label: playlist.name
-                    }))}
-                  required
-                />
-                <TextField
-                  label="Tytuł eventu"
-                  value={eventForm.title}
-                  onChange={(value) => setEventForm((current) => ({ ...current, title: value }))}
-                  placeholder="Weekend sale"
-                  required
-                />
-                <TextAreaField
-                  label="Opis"
-                  value={eventForm.message}
-                  onChange={(value) => setEventForm((current) => ({ ...current, message: value }))}
-                  placeholder="Podmienia standardowy loop na kampanię specjalną."
-                />
-                <TextField
-                  label="Start"
-                  value={eventForm.startsAt}
-                  onChange={(value) => setEventForm((current) => ({ ...current, startsAt: value }))}
-                  type="datetime-local"
-                  required
-                />
-                <TextField
-                  label="Koniec"
-                  value={eventForm.endsAt}
-                  onChange={(value) => setEventForm((current) => ({ ...current, endsAt: value }))}
-                  type="datetime-local"
-                  required
-                />
-                <TextField
-                  label="Priorytet"
-                  value={eventForm.priority}
-                  onChange={(value) =>
-                    setEventForm((current) => ({ ...current, priority: value }))
-                  }
-                  type="number"
-                  required
-                />
-                <ToggleField
-                  label="Aktywny"
-                  checked={eventForm.isActive}
-                  onChange={(value) => setEventForm((current) => ({ ...current, isActive: value }))}
-                />
-                <button className="primary-button" type="submit">
-                  Dodaj event
-                </button>
-              </form>
-            </Panel>
+        {activeSection === "install" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Adresy systemowe</h3>
+                  <span>hardcoded dla playera</span>
+                </header>
+                <div className="info-block">
+                  <strong>Adres API / CMS</strong>
+                  <code>{dashboard.installation.apiBaseUrl || getApiBaseUrl()}</code>
+                </div>
+                <div className="info-block">
+                  <strong>Link do APK</strong>
+                  <a href={dashboard.installation.apkUrl} target="_blank" rel="noreferrer">
+                    {dashboard.installation.apkUrl}
+                  </a>
+                </div>
+              </article>
 
-            <Panel title="Eventy" subtitle="Reakcje natychmiastowe i przejęcia kanałów">
-              <div className="list-stack">
-                {dashboard.events.map((event) => (
-                  <RecordRow
-                    key={event.id}
-                    title={event.title}
-                    subtitle={`${event.expand?.playlist?.name || "Brak playlisty"} • ${
-                      event.expand?.channel?.name || "Kanał globalny"
-                    }`}
-                    meta={`${formatDateTime(event.startsAt)} → ${formatDateTime(event.endsAt)}`}
-                    badge={<PriorityBadge value={event.priority} />}
-                    action={
-                      <button
-                        className="danger-button"
-                        onClick={() => handleDelete("events", event.id, event.title)}
-                        type="button"
-                      >
-                        Usuń
-                      </button>
-                    }
-                  />
-                ))}
-                {!dashboard.events.length ? <EmptyState text="Nie skonfigurowano żadnych eventów." /> : null}
-              </div>
-            </Panel>
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Flow onboardingu</h3>
+                  <span>bez kodów PB</span>
+                </header>
+                <ol className="steps-list">
+                  <li>Zainstaluj playera z linku APK.</li>
+                  <li>Na ekranie TV pojawi się stały numer seryjny, np. `MK192473021G`.</li>
+                  <li>Urządzenie samo pokaże się w sekcji `Urządzenia` jako `pending`.</li>
+                  <li>W CMS kliknij wpis z kolejki, nadaj nazwę, klienta i kanał, potem `Zatwierdź`.</li>
+                  <li>Player sam pobierze playlistę z jednego serwera i zacznie emisję.</li>
+                </ol>
+              </article>
+            </div>
           </section>
-        ) : null}
-
-        {activeSection === "app" ? (
-          <section className="section-grid">
-            <Panel title="Instalacja Android TV" subtitle="Link do APK i prosty onboarding dla operatora">
-              <div className="install-grid">
-                <article className="mini-card install-card">
-                  <span className="eyebrow">download</span>
-                  <h3>Publiczny link do APK</h3>
-                  <p className="helper-copy">{installUrl}</p>
-                  <p>{apkAvailable ? "Plik APK jest już opublikowany." : "Plik APK nie jest jeszcze opublikowany."}</p>
-                  <button className="primary-button" onClick={() => void handleCopyInstallUrl()} type="button">
-                    Skopiuj link
-                  </button>
-                </article>
-
-                <article className="mini-card install-card">
-                  <span className="eyebrow">krok 1</span>
-                  <h3>Na TV otwórz link</h3>
-                  <p>
-                    Wpisz w przeglądarce TV dokładnie: <code>{installUrl}</code>
-                  </p>
-                </article>
-
-                <article className="mini-card install-card">
-                  <span className="eyebrow">krok 2</span>
-                  <h3>Player pokaże identyfikator</h3>
-                  <p>
-                    Po pierwszym uruchomieniu apka sama zgłosi się do CMS jako urządzenie oczekujące.
-                    Na ekranie TV zobaczysz jego stały identyfikator instalacji.
-                  </p>
-                  <p>Ten identyfikator jest stały dla konkretnej instalacji aplikacji, jak lekki numer seryjny.</p>
-                </article>
-
-                <article className="mini-card install-card">
-                  <span className="eyebrow">krok 3</span>
-                  <h3>CMS zatwierdza urządzenie</h3>
-                  <p>
-                    W sekcji <strong>Urządzenia</strong> wybierz ekran z kolejki, nadaj mu nazwę,
-                    przypisz klienta i kanał. Po zatwierdzeniu TV samo zaloguje się do
-                    <code>screen_users</code> i zacznie raportować status, screenshoty i heartbeat.
-                  </p>
-                </article>
-              </div>
-            </Panel>
-
-            <Panel title="Ostatnie komendy i wdrożenia" subtitle="Szybki podgląd zdalnego sterowania urządzeniami">
-              <div className="list-stack">
-                {recentCommands.map((command) => (
-                  <RecordRow
-                    key={command.id}
-                    title={translateCommand(command.commandType)}
-                    subtitle={command.expand?.screen?.locationLabel || command.expand?.screen?.name || "Urządzenie"}
-                    meta={`${command.status} • ${formatDateTime(command.created)}${
-                      command.resultMessage ? ` • ${command.resultMessage}` : ""
-                    }`}
-                    badge={<span className="soft-badge">{command.status}</span>}
-                  />
-                ))}
-                {!recentCommands.length ? (
-                  <EmptyState text="Po pierwszych akcjach z CMS zobaczysz tu historię komend." />
-                ) : null}
-              </div>
-            </Panel>
-          </section>
-        ) : null}
-
-        {!canSeeAllClients ? (
-          <footer className="scope-note">
-            Widok jest zawężony do klienta: <strong>{authRecord?.expand?.client?.name || authRecord?.client}</strong>
-          </footer>
         ) : null}
       </main>
     </div>
   );
 }
 
-function scopeDashboard(data: DashboardData, authRecord: CmsUserRecord | null): DashboardData {
-  if (!authRecord?.client || authRecord.role === "owner") {
-    return data;
-  }
-
-  const clientId = authRecord.client;
-  const screens = data.screens.filter((screen) => screen.client === clientId);
-  const screenIds = new Set(screens.map((screen) => screen.id));
-
-  return {
-    clients: data.clients.filter((client) => client.id === clientId),
-    channels: data.channels.filter((channel) => channel.client === clientId),
-    cmsUsers: data.cmsUsers.filter(
-      (user) => user.id === authRecord.id || !user.client || user.client === clientId
-    ),
-    screens,
-    devicePairings: data.devicePairings.filter(
-      (pairing) => !pairing.client || pairing.client === clientId || screenIds.has(pairing.screen)
-    ),
-    deviceCommands: data.deviceCommands.filter((command) => screenIds.has(command.screen)),
-    mediaAssets: data.mediaAssets.filter((asset) => asset.client === clientId),
-    playlists: data.playlists.filter((playlist) => playlist.client === clientId),
-    playlistItems: data.playlistItems.filter((item) => item.client === clientId),
-    schedules: data.schedules.filter((schedule) => schedule.client === clientId),
-    events: data.events.filter((event) => event.client === clientId)
-  };
+function sectionTitle(section: SectionKey) {
+  return navItems.find((item) => item.key === section)?.label || "Pulpit";
 }
 
-function hydrateDashboardRelations(data: DashboardData): DashboardData {
-  const clients = data.clients.map((client) => ({
-    ...client
-  }));
-  const clientsById = new Map(clients.map((client) => [client.id, client]));
-
-  const channels = data.channels.map((channel) => ({
-    ...channel,
-    expand: {
-      ...channel.expand,
-      client: clientsById.get(channel.client)
-    }
-  }));
-  const channelsById = new Map(channels.map((channel) => [channel.id, channel]));
-
-  const cmsUsers = data.cmsUsers.map((user) => ({
-    ...user,
-    expand: {
-      ...user.expand,
-      client: clientsById.get(user.client)
-    }
-  }));
-  const cmsUsersById = new Map(cmsUsers.map((user) => [user.id, user]));
-
-  const screens = data.screens.map((screen) => ({
-    ...screen,
-    expand: {
-      ...screen.expand,
-      client: clientsById.get(screen.client),
-      channel: channelsById.get(screen.channel)
-    }
-  }));
-  const screensById = new Map(screens.map((screen) => [screen.id, screen]));
-
-  const devicePairings = data.devicePairings.map((pairing) => ({
-    ...pairing,
-    expand: {
-      ...pairing.expand,
-      client: clientsById.get(pairing.client),
-      channel: channelsById.get(pairing.channel),
-      screen: screensById.get(pairing.screen)
-    }
-  }));
-
-  const deviceCommands = data.deviceCommands.map((command) => ({
-    ...command,
-    expand: {
-      ...command.expand,
-      screen: screensById.get(command.screen),
-      issuedBy: cmsUsersById.get(command.issuedBy)
-    }
-  }));
-
-  const mediaAssets = data.mediaAssets.map((asset) => ({
-    ...asset,
-    expand: {
-      ...asset.expand,
-      client: clientsById.get(asset.client)
-    }
-  }));
-  const mediaAssetsById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
-
-  const playlists = data.playlists.map((playlist) => ({
-    ...playlist,
-    expand: {
-      ...playlist.expand,
-      client: clientsById.get(playlist.client),
-      channel: channelsById.get(playlist.channel)
-    }
-  }));
-  const playlistsById = new Map(playlists.map((playlist) => [playlist.id, playlist]));
-
-  const playlistItems = data.playlistItems.map((item) => ({
-    ...item,
-    expand: {
-      ...item.expand,
-      playlist: playlistsById.get(item.playlist),
-      mediaAsset: mediaAssetsById.get(item.mediaAsset)
-    }
-  }));
-
-  const schedules = data.schedules.map((schedule) => ({
-    ...schedule,
-    expand: {
-      ...schedule.expand,
-      client: clientsById.get(schedule.client),
-      channel: channelsById.get(schedule.channel),
-      playlist: playlistsById.get(schedule.playlist)
-    }
-  }));
-
-  const events = data.events.map((event) => ({
-    ...event,
-    expand: {
-      ...event.expand,
-      client: clientsById.get(event.client),
-      channel: channelsById.get(event.channel),
-      screen: screensById.get(event.screen),
-      playlist: playlistsById.get(event.playlist)
-    }
-  }));
-
-  return {
-    clients: [...clients].sort((left, right) => compareText(left.name, right.name)),
-    channels: [...channels].sort((left, right) => compareText(left.name, right.name)),
-    cmsUsers: [...cmsUsers].sort((left, right) =>
-      compareText(left.name || left.email, right.name || right.email)
-    ),
-    screens: [...screens].sort(
-      (left, right) =>
-        compareDateDesc(left.lastSeenAt, right.lastSeenAt) ||
-        compareText(left.locationLabel || left.name, right.locationLabel || right.name)
-    ),
-    devicePairings: [...devicePairings].sort(
-      (left, right) =>
-        compareDateDesc(left.lastSeenAt, right.lastSeenAt) ||
-        compareText(left.pairingCode, right.pairingCode)
-    ),
-    deviceCommands: [...deviceCommands].sort(
-      (left, right) =>
-        compareDateDesc(left.processedAt || left.expiresAt, right.processedAt || right.expiresAt) ||
-        compareText(left.commandType, right.commandType)
-    ),
-    mediaAssets: [...mediaAssets].sort((left, right) => compareText(left.title, right.title)),
-    playlists: [...playlists].sort((left, right) => compareText(left.name, right.name)),
-    playlistItems: [...playlistItems].sort((left, right) => left.sortOrder - right.sortOrder),
-    schedules: [...schedules].sort((left, right) => right.priority - left.priority),
-    events: [...events].sort(
-      (left, right) =>
-        right.priority - left.priority || compareDateDesc(left.startsAt, right.startsAt)
-    )
-  };
-}
-
-function FlashBanner({ flash }: { flash: FlashMessage }) {
-  return <div className={flash.kind === "success" ? "flash success" : "flash error"}>{flash.text}</div>;
-}
-
-function Panel(props: { title: string; subtitle: string; children: ReactNode }) {
-  return (
-    <section className="panel">
-      <div className="panel-head">
-        <div>
-          <h2>{props.title}</h2>
-          <p>{props.subtitle}</p>
-        </div>
-      </div>
-      {props.children}
-    </section>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <article className="stat-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
-
-function MetricBadge({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric-badge">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function RecordRow(props: {
-  title: string;
-  subtitle: string;
-  meta: string;
-  badge?: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <article className="record-row">
-      <div className="record-row-main">
-        <div className="record-row-top">
-          <h3>{props.title}</h3>
-          {props.badge}
-        </div>
-        <p>{props.subtitle}</p>
-        <small>{props.meta}</small>
-      </div>
-      {props.action}
-    </article>
-  );
-}
-
-function TextField(props: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: string;
-  required?: boolean;
-  id?: string;
-  name?: string;
-}) {
-  const generatedId = useId();
-  const fieldId = props.id || generatedId;
-  const fieldName = props.name || fieldNameFromLabel(props.label);
-
-  return (
-    <label className="field" htmlFor={fieldId}>
-      <span>{props.label}</span>
-      <input
-        id={fieldId}
-        name={fieldName}
-        type={props.type || "text"}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        placeholder={props.placeholder}
-        required={props.required}
-      />
-    </label>
-  );
-}
-
-function TextAreaField(props: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  id?: string;
-  name?: string;
-}) {
-  const generatedId = useId();
-  const fieldId = props.id || generatedId;
-  const fieldName = props.name || fieldNameFromLabel(props.label);
-
-  return (
-    <label className="field field-full" htmlFor={fieldId}>
-      <span>{props.label}</span>
-      <textarea
-        id={fieldId}
-        name={fieldName}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        placeholder={props.placeholder}
-        rows={4}
-      />
-    </label>
-  );
-}
-
-function SelectField(props: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-  required?: boolean;
-  id?: string;
-  name?: string;
-}) {
-  const generatedId = useId();
-  const fieldId = props.id || generatedId;
-  const fieldName = props.name || fieldNameFromLabel(props.label);
-
-  return (
-    <label className="field" htmlFor={fieldId}>
-      <span>{props.label}</span>
-      <select
-        id={fieldId}
-        name={fieldName}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        required={props.required}
-      >
-        {!props.required ? null : <option value="">Wybierz…</option>}
-        {props.options.map((option) => (
-          <option key={`${option.value}-${option.label}`} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function ToggleField(props: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  id?: string;
-  name?: string;
-}) {
-  const generatedId = useId();
-  const fieldId = props.id || generatedId;
-  const fieldName = props.name || fieldNameFromLabel(props.label);
-
-  return (
-    <label className="toggle-field" htmlFor={fieldId}>
-      <span>{props.label}</span>
-      <input
-        id={fieldId}
-        name={fieldName}
-        type="checkbox"
-        checked={props.checked}
-        onChange={(event) => props.onChange(event.target.checked)}
-      />
-    </label>
-  );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div className="empty-state">{text}</div>;
-}
-
-function StatusBadge({
-  status
-}: {
-  status: "pairing" | "online" | "offline" | "maintenance";
-}) {
-  return <span className={`status-badge ${status}`}>{status}</span>;
-}
-
-function PriorityBadge({ value }: { value: number }) {
-  return <span className="priority-badge">prio {value}</span>;
-}
-
-function toDeviceProfileForm(screen: ScreenUserRecord) {
-  return {
-    screen: screen.id,
-    name: screen.name || "",
-    client: screen.client || "",
-    channel: screen.channel || "",
-    locationLabel: screen.locationLabel || "",
-    volumePercent: String(screen.volumePercent || 80),
-    desiredDisplayState: screen.desiredDisplayState || "active",
-    networkMode: screen.networkMode || "dhcp",
-    networkAddress: screen.networkAddress || "",
-    networkGateway: screen.networkGateway || "",
-    networkDns: screen.networkDns || "",
-    wifiSsid: screen.wifiSsid || "",
-    networkNotes: screen.networkNotes || "",
-    notes: screen.notes || ""
-  };
-}
-
-function toApprovalForm(pairing: DevicePairingRecord, authRecord: CmsUserRecord | null) {
-  return {
-    pairingId: pairing.id,
-    name: pairing.deviceName || "",
-    client: pairing.client || authRecord?.client || "",
-    channel: pairing.channel || "",
-    locationLabel: pairing.locationLabel || "",
-    volumePercent: "80",
-    notes: ""
-  };
-}
-
-function toScheduleForm(schedule: ScheduleRuleRecord) {
-  return {
-    client: schedule.client || "",
-    channel: schedule.channel || "",
-    playlist: schedule.playlist || "",
-    label: schedule.label || "",
-    startDate: formatDateInputValue(schedule.startDate),
-    endDate: formatDateInputValue(schedule.endDate),
-    startTime: schedule.startTime || "08:00",
-    endTime: schedule.endTime || "22:00",
-    daysOfWeek: schedule.daysOfWeek || "1,2,3,4,5,6,0",
-    priority: String(schedule.priority || 100),
-    isActive: schedule.isActive
-  };
-}
-
-function resetScheduleEditor(
-  setScheduleForm: (value: typeof defaultScheduleForm) => void,
-  setEditingScheduleId: (value: string | null) => void
-) {
-  setScheduleForm(defaultScheduleForm);
-  setEditingScheduleId(null);
-}
-
-function getProtectedFileUrl(record: object, fileName: string, token: string) {
-  if (!fileName) {
-    return "";
-  }
-
-  return pb.files.getURL(record as never, fileName, token ? { token } : {});
-}
-
-function statusFromHeartbeat(
-  screen: ScreenUserRecord
-): "pairing" | "online" | "offline" | "maintenance" {
-  if (screen.status === "maintenance") {
-    return "maintenance";
-  }
-
-  if (screen.status === "pairing" && !screen.lastSeenAt) {
-    return "pairing";
-  }
-
-  return isOnline(screen.lastSeenAt) ? "online" : "offline";
-}
-
-function isOnline(lastSeenAt: string) {
-  if (!lastSeenAt) {
-    return false;
-  }
-
-  const diff = Date.now() - new Date(lastSeenAt).getTime();
-  return diff <= 5 * 60 * 1000;
-}
-
-function isScheduledToday(daysOfWeek: string) {
-  if (!daysOfWeek) {
-    return true;
-  }
-
-  const day = new Date().getDay();
-  return daysOfWeek
-    .split(",")
-    .map((item) => Number(item.trim()))
-    .filter((value) => !Number.isNaN(value))
-    .includes(day);
-}
-
-function isCurrentEvent(startsAt: string, endsAt: string) {
-  const now = Date.now();
-  const start = startsAt ? new Date(startsAt).getTime() : now;
-  const end = endsAt ? new Date(endsAt).getTime() : now;
-  return now >= start && now <= end;
-}
-
-function toIsoDate(value: string) {
-  if (!value) {
-    return "";
-  }
-
-  return new Date(`${value}T00:00:00`).toISOString();
-}
-
-function toIsoDateTime(value: string) {
-  if (!value) {
-    return "";
-  }
-
-  return new Date(value).toISOString();
+function toSlug(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function formatDateTime(value: string) {
   if (!value) {
-    return "brak daty";
+    return "brak";
   }
 
   return new Intl.DateTimeFormat("pl-PL", {
-    dateStyle: "medium",
+    dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(value));
 }
 
-function formatDateInputValue(value: string) {
-  if (!value) {
-    return "";
-  }
-
-  const date = new Date(value);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatHeartbeat(value: string) {
-  if (!value) {
-    return "";
-  }
-
-  return new Intl.RelativeTimeFormat("pl", { numeric: "auto" }).format(
-    Math.round((new Date(value).getTime() - Date.now()) / 60000),
-    "minute"
+function Field(props: { label: string; htmlFor: string; children: ReactNode }) {
+  return (
+    <label className="field" htmlFor={props.htmlFor}>
+      <span>{props.label}</span>
+      {props.children}
+    </label>
   );
 }
 
-function buildScreenEmailFromInstallerId(deviceName: string, installerId: string) {
-  const base = slugify(deviceName) || "android-tv";
-  return `screen-${base}-${installerId.replace(/[^a-z0-9]/gi, "").slice(0, 24).toLowerCase()}@screen.signaldeck.local`;
-}
-
-function shortInstallerId(value: string) {
-  return value ? value.slice(0, 8) : "brak";
-}
-
-function translateCommand(commandType: DeviceCommandRecord["commandType"]) {
-  switch (commandType) {
-    case "sync":
-      return "Wymuś synchronizację";
-    case "capture_screenshot":
-      return "Pobierz screenshot";
-    case "blackout":
-      return "Wyłącz ekran aplikacji";
-    case "wake":
-      return "Włącz ekran aplikacji";
-    case "restart_app":
-      return "Restart appki";
-    default:
-      return commandType;
-  }
-}
-
-function compareText(left: string, right: string) {
-  return String(left || "").localeCompare(String(right || ""), "pl", {
-    sensitivity: "base",
-    numeric: true
-  });
-}
-
-function compareDateDesc(left: string, right: string) {
-  const leftValue = left ? new Date(left).getTime() : 0;
-  const rightValue = right ? new Date(right).getTime() : 0;
-  return rightValue - leftValue;
-}
-
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-}
-
-function fieldNameFromLabel(label: string) {
-  return slugify(label) || "field";
-}
-
-function stripExtension(name: string) {
-  return name.replace(/\.[^/.]+$/, "");
-}
-
-function compactRecord<T extends Record<string, unknown>>(value: T) {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
-
-async function readVideoDuration(file: File) {
-  return new Promise<number>((resolve) => {
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.onloadedmetadata = () => {
-      const duration = video.duration;
-      URL.revokeObjectURL(video.src);
-      resolve(Number.isFinite(duration) ? duration : 0);
-    };
-    video.onerror = () => resolve(0);
-    video.src = URL.createObjectURL(file);
-  });
-}
-
-async function safeGetFileToken() {
-  try {
-    return await pb.files.getToken();
-  } catch (error) {
-    logCmsError("files.getToken", error);
-    return "";
-  }
-}
-
-async function safeGetFullList<T>(
-  collectionName: string,
-  options?: Parameters<typeof pb.collection>[0] extends never ? never : Record<string, unknown>
-) {
-  try {
-    return await pb.collection(collectionName).getFullList<T>(options);
-  } catch (error) {
-    logCmsError(`getFullList:${collectionName}`, error);
-    return [] as T[];
-  }
-}
-
-function logCmsError(context: string, error: unknown) {
-  console.error(`[Signal Deck CMS] ${context}`);
-  console.error(error);
-}
-
-function escapeFilterValue(value: string) {
-  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function readError(error: unknown, fallback: string) {
-  const responseMessage =
-    typeof error === "object" && error !== null && "response" in error
-      ? (error as { response?: { message?: string } }).response?.message
-      : "";
-
-  const responseData =
-    typeof error === "object" && error !== null && "response" in error
-      ? (error as { response?: { data?: Record<string, { message?: string }> } }).response?.data
-      : undefined;
-
-  if (responseData && typeof responseData === "object") {
-    const firstFieldError = Object.values(responseData)
-      .map((entry) => entry?.message)
-      .find((message) => typeof message === "string" && message.trim());
-
-    if (firstFieldError) {
-      return firstFieldError;
-    }
-  }
-
-  if (typeof responseMessage === "string" && responseMessage.trim()) {
-    return responseMessage;
-  }
-
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return fallback;
-}
-
-function showFlash(
-  setter: (value: FlashMessage | null) => void,
-  flash: FlashMessage
-) {
-  setter(flash);
-  window.clearTimeout((showFlash as { timer?: number }).timer);
-  (showFlash as { timer?: number }).timer = window.setTimeout(() => setter(null), 4200);
+function EmptyState(props: { text: string }) {
+  return <div className="empty-state">{props.text}</div>;
 }
 
 export default App;

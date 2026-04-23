@@ -3,13 +3,17 @@
   "private": true,
   "workspaces": [
     "apps/cms",
-    "apps/player"
+    "apps/player",
+    "apps/server"
   ],
   "scripts": {
     "dev:cms": "npm run dev --workspace @ds/cms",
     "build:cms": "npm run build --workspace @ds/cms",
     "dev:player": "npm run dev --workspace @ds/player",
     "build:player": "npm run build --workspace @ds/player",
+    "dev:server": "npm run dev --workspace @ds/server",
+    "start:server": "npm run start --workspace @ds/server",
+    "start": "npm run start:server",
     "build:android:debug": "npm run android:build:debug --workspace @ds/player",
     "build:android:release": "npm run android:build:release --workspace @ds/player",
     "publish:apk": "node scripts/publish-apk.mjs",
