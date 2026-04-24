@@ -1,0 +1,15 @@
+.git
+.DS_Store
+node_modules
+**/node_modules
+dist
+**/dist
+data
+coverage
+.env
+.env.local
+.env.production
+apps/server/src/generated
+apps/server/prisma/generated
+apps/player/.capacitor
+apps/player/android

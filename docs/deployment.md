@@ -12,12 +12,12 @@ W Coolify trzymaj jeden główny serwis dla CMS + API:
 
 - Repository: `https://github.com/berry-secure/digital-signage.git`
 - Branch: docelowo `main`
-- Build command: `npm run build`
-- Start command: `npm run start:server`
+- Build Pack: `Dockerfile`
+- Dockerfile location: `/Dockerfile`
 - Port aplikacji: `3000`
 - Public domain: `https://cms.berry-secure.pl`
 
-Repo zawiera `nixpacks.toml`, który przypina Nixpacks do Node 22 w wersji zgodnej z Prisma 7. Bez tego Coolify może wybrać Node `22.11.0`, a Prisma wymaga minimum `22.12.0`.
+Repo zawiera `Dockerfile` oparty o oficjalny obraz `node:22-bookworm-slim`. To omija problem Nixpacks, który potrafi wybrać Node `22.11.0`, a Prisma 7 wymaga minimum `22.12.0`.
 
 Backend serwuje:
 
