@@ -1,182 +1,142 @@
-# Wdrożenie
+# Wdrożenie Signal Deck
 
-## 1. PocketBase
-
-Zakładam, że PocketBase działa już w Coolify pod:
-
-- `https://pb.berry-secure.pl`
-
-Zanim odpalisz CMS i player:
-
-1. Ustaw w PocketBase poprawny App URL na `https://pb.berry-secure.pl`.
-2. W ustawieniach CORS dodaj co najmniej:
-   - `https://cms.berry-secure.pl`
-   - `http://localhost`
-3. Jeśli kiedyś będziesz robił wersję iOS, dodaj też `capacitor://localhost`.
-4. Uruchom skrypt setupu kolekcji z głównego katalogu repo:
-
-```bash
-cd /Users/przeczacyklif/Movies/digital-signage
-npm install
-npm run pocketbase:setup -- \
-  --url https://pb.berry-secure.pl \
-  --superuserEmail TWOJ_SUPERUSER_EMAIL \
-  --superuserPassword 'TWOJE_SUPERUSER_HASLO' \
-  --ownerEmail owner@berry-secure.pl \
-  --ownerPassword 'MOCNE_HASLO_DO_CMS' \
-  --ownerName 'Berry Secure Owner'
-```
-
-Jesli uzywasz `zsh`, pamietaj:
-
-- nie wklejaj cudzyslowow `„ ”`, tylko zwykle ASCII `'` albo `"`
-- jesli haslo ma znak `!`, wpisz je w apostrofach, np. `'17Grudnia1897!'`
-
-Po tym kroku będziesz mieć gotowe kolekcje:
-
-- `clients`
-- `channels`
-- `cms_users`
-- `screen_users`
-- `device_pairings`
-- `device_commands`
-- `media_assets`
-- `playlists`
-- `playlist_items`
-- `schedule_rules`
-- `events`
-
-## 2. CMS w Coolify
-
-Panel ma iść pod:
+Aktualna produkcja działa na VPS z Coolify pod:
 
 - `https://cms.berry-secure.pl`
 
-W Coolify utwórz nowy resource z repozytorium i ustaw:
+Ta domena jest aktualnym production defaultem. Kod nadal korzysta z envów (`PUBLIC_BASE_URL`, `DATABASE_URL`, później `API_BASE_URL` / `UPDATE_BASE_URL`), żeby w przyszłości dało się zmienić domenę albo przenieść platformę na inny VPS bez przepisywania logiki aplikacji.
 
-- Base Directory: `apps/cms`
-- Install Command: `npm install`
-- Build Command: `npm run build`
-- Publish Directory: `dist`
+## 1. Coolify Resource
 
-Zmienne środowiskowe:
+W Coolify trzymaj jeden główny serwis dla CMS + API:
+
+- Repository: `https://github.com/berry-secure/digital-signage.git`
+- Branch: docelowo `main`
+- Build command: `npm install && npm run build`
+- Start command: `npm run start:server`
+- Port aplikacji: `3000`
+- Public domain: `https://cms.berry-secure.pl`
+
+Backend serwuje:
+
+- API pod `/api/*`
+- CMS z `apps/cms/dist`
+- APK pod `/app/maasck.apk`
+- uploady pod `/uploads/*`
+
+## 2. Env W Coolify
+
+Minimalne envy dla obecnej produkcji:
 
 ```bash
-VITE_POCKETBASE_URL=https://pb.berry-secure.pl
+NODE_ENV=production
+PORT=3000
+PUBLIC_BASE_URL=https://cms.berry-secure.pl
+ADMIN_EMAIL=owner@berry-secure.pl
+ADMIN_PASSWORD=TU_MOCNE_HASLO_ADMINA
+ADMIN_NAME=Berry Secure Owner
+DATA_DIR=/data
 ```
 
-Potem przypnij domenę:
+Jeśli uruchamiasz już PostgreSQL w Coolify, dodaj:
 
-- `https://cms.berry-secure.pl`
+```bash
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public
+```
 
-Po deployu logujesz się kontem z `cms_users`.
+Bez `DATABASE_URL` backend działa w trybie JSON storage i czyta/zapisuje:
 
-## 3. Pierwsza konfiguracja w CMS
+```bash
+/data/app-db.json
+/data/uploads
+```
 
-Kolejność pracy w panelu:
+Z `DATABASE_URL` backend przełącza się na Prisma/PostgreSQL. Pliki media nadal zostają lokalnie w `DATA_DIR/uploads`, więc dla produkcji wolumen `/data` nadal musi być trwały.
 
-1. Dodaj klienta.
-2. Dodaj kanał dla klienta.
-3. Dodaj konto operatora w sekcji `Użytkownicy`, jeśli potrzebujesz dodatkowych loginów.
-4. Dodaj media.
-5. Dodaj playlistę.
-6. Dodaj elementy do playlisty.
-7. Dodaj regułę harmonogramu.
-8. Zainstaluj playera na Android TV.
-9. W sekcji `Urządzenia > Add New Device` wpisz kod pokazany przez TV.
+## 3. PostgreSQL W Coolify
 
-Po sparowaniu CMS utworzy rekord w `screen_users`, a player zaloguje się już sam.
+Bezpieczna kolejność przejścia z JSON storage na PostgreSQL:
 
-## 4. Build `.apk`
+1. Zrób backup wolumenu `/data`, szczególnie:
+
+```bash
+/data/app-db.json
+/data/uploads
+```
+
+2. Utwórz PostgreSQL resource w Coolify.
+3. Skopiuj connection string do `DATABASE_URL`.
+4. Przed deployem z `DATABASE_URL` uruchom migrację schematu:
+
+```bash
+npm run prisma:migrate:dev --workspace @ds/server
+```
+
+Na produkcji docelowo lepszy będzie osobny deploy command / one-off command Coolify z tym samym `DATABASE_URL`.
+
+5. Najpierw zrób dry-run importu obecnego JSON:
+
+```bash
+npm run migrate:json:postgres -- --data /data/app-db.json
+```
+
+6. Dopiero jeśli liczby wyglądają dobrze, wykonaj import:
+
+```bash
+npm run migrate:json:postgres -- --data /data/app-db.json --apply
+```
+
+`--apply` wymaga `DATABASE_URL`. Skrypt usuwa zawartość tabel zarządzanych przez Signal Deck i wstawia dane z JSON, więc używaj go tylko w kontrolowanym oknie migracji po backupie.
+
+## 4. Build APK
 
 Player siedzi w `apps/player`.
 
-Najpierw potrzebujesz działającej Javy i Android SDK.
-Jeśli ich nie masz, sam projekt Android jest już gotowy, ale finalny `.apk` nie zbuduje się lokalnie.
-
-Przygotowanie projektu:
-
-```bash
-cd /Users/przeczacyklif/Movies/digital-signage/apps/player
-npm install
-npm run build
-npm run cap:sync
-```
-
-Jeśli katalog `android/` dopiero powstaje, jednorazowo uruchom:
-
-```bash
-npm run cap:add:android
-```
-
-Potem możesz:
-
-```bash
-npm run android:open
-```
-
-albo bez Android Studio:
+Lokalny debug build:
 
 ```bash
 cd /Users/przeczacyklif/Movies/digital-signage
 npm run build:android:debug
 ```
 
-Po buildzie opublikuj plik dokładnie tam, skąd CMS go linkuje:
+Publikacja APK do CMS:
 
 ```bash
-cd /Users/przeczacyklif/Movies/digital-signage
 npm run publish:apk
 ```
 
-To skopiuje gotowy build do:
+To kopiuje build do:
 
-- `apps/cms/public/app/maasck.apk`
+```bash
+apps/cms/public/app/maasck.apk
+```
 
-Potem:
+Po deployu CMS link będzie dostępny pod:
 
-1. Poczekaj, aż Gradle dociągnie zależności.
-2. Podłącz urządzenie albo emulator.
-3. Zrób test przez `Run`.
-4. Dla gotowego `.apk` wybierz `Build > Build APK(s)`.
-5. Dla wersji produkcyjnej podpisz release key i zbuduj release build.
-6. Po każdym nowym buildzie znowu uruchom `npm run publish:apk`.
+```bash
+https://cms.berry-secure.pl/app/maasck.apk
+```
 
-## 5. Pierwsze uruchomienie playera
+## 5. Player Android TV
 
-Na ekranie konfiguracji wpisujesz tylko:
+Obecny player produkcyjnie łączy się z:
 
-- PocketBase URL: `https://pb.berry-secure.pl`
+```bash
+https://cms.berry-secure.pl
+```
 
-Potem player:
+Flow pozostaje bez zmian:
 
-- generuje kod parowania
-- czeka, aż wpiszesz ten kod w CMS
-- po sparowaniu sam loguje się do `screen_users`
-- zaczyna wysyłać heartbeat, screenshoty i odbierać komendy
+1. Player generuje stały serial i lokalny secret.
+2. Wysyła `/api/player/session`.
+3. Jeśli jest nowy, trafia do kolejki jako `pending`.
+4. CMS zatwierdza urządzenie i przypina klienta/kanał.
+5. Player pobiera playlistę i emituje treści.
 
-Po pierwszym zalogowaniu player pobiera:
+## 6. Ważne Zasady
 
-- dane ekranu i kanału
-- schedule
-- eventy override
-- playlistę i media
-
-W CMS znajdziesz też:
-
-- status online/offline urządzeń
-- ostatni screenshot
-- zdalny `sync`
-- zdalny `blackout/wake`
-- formularz profilu sieciowego urządzenia
-
-Ważne:
-
-- `blackout` to aplikacyjne wygaszenie ekranu, nie zawsze fizyczne wyłączenie panelu TV
-- pola sieciowe w CMS są bezpiecznym profilem operacyjnym; na stock Android TV bez MDM / device owner nie da się ich zwykle zastosować całkiem bezdotykowo
-
-## 6. Ważna uwaga o autoplay z dźwiękiem
-
-Player jest przygotowany pod wideo z dźwiękiem, ale pierwszy start na Android TV/WebView może wymagać jednego kliknięcia przycisku `Uruchom odtwarzanie`.
-To normalne zabezpieczenie autoplay w webview.
-Po pierwszym odblokowaniu kolejne materiały lecą już automatycznie.
+- Nie zmieniaj domeny produkcyjnej teraz; trzymaj `PUBLIC_BASE_URL=https://cms.berry-secure.pl`.
+- Nie ustawiaj `DATABASE_URL` bez migracji schematu i dry-run importu JSON.
+- Nie uruchamiaj `migrate:json:postgres -- --apply` bez backupu `/data`.
+- Uploady zostają na trwałym wolumenie `/data/uploads`, dopóki nie przejdziemy na storage S3-ready.
+- `blackout` to aplikacyjne wygaszenie ekranu, nie gwarantowane fizyczne wyłączenie panelu TV.

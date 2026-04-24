@@ -5,6 +5,8 @@ dist
 .env.local
 .env.production
 coverage
+apps/server/src/generated
+apps/server/prisma/generated
 apps/player/.capacitor
 apps/player/android/.gradle
 apps/player/android/local.properties

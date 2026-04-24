@@ -12,12 +12,19 @@
     "dev:player": "npm run dev --workspace @ds/player",
     "build:player": "npm run build --workspace @ds/player",
     "dev:server": "npm run dev --workspace @ds/server",
+    "build:server": "npm run build --workspace @ds/server",
+    "test:server": "npm run test --workspace @ds/server",
+    "prisma:validate": "npm run prisma:validate --workspace @ds/server",
+    "prisma:generate": "npm run prisma:generate --workspace @ds/server",
+    "prisma:migrate:dev": "npm run prisma:migrate:dev --workspace @ds/server",
+    "prisma:studio": "npm run prisma:studio --workspace @ds/server",
+    "migrate:json:postgres": "npm run migrate:json:postgres --workspace @ds/server",
     "start:server": "npm run start --workspace @ds/server",
     "start": "npm run start:server",
     "build:android:debug": "npm run android:build:debug --workspace @ds/player",
     "build:android:release": "npm run android:build:release --workspace @ds/player",
     "publish:apk": "node scripts/publish-apk.mjs",
-    "build": "npm run build:cms && npm run build:player",
+    "build": "npm run build:server && npm run build:cms && npm run build:player",
     "pocketbase:setup": "node scripts/setup-pocketbase.mjs"
   }
 }
