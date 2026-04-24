@@ -1,0 +1,253 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  owner
+  manager
+  editor
+}
+
+enum MediaKind {
+  video
+  image
+}
+
+enum MediaStatus {
+  draft
+  published
+}
+
+enum DeviceApprovalStatus {
+  pending
+  approved
+}
+
+enum DeviceDisplayState {
+  active
+  blackout
+}
+
+enum DevicePlayerState {
+  waiting
+  idle
+  playing
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  login
+  logout
+  approve_device
+  reset_device
+  player_session
+}
+
+model User {
+  id           String       @id @default(uuid()) @db.Uuid
+  email        String       @unique
+  name         String
+  role         UserRole     @default(editor)
+  passwordHash String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  clients      UserClient[]
+  sessions     Session[]
+  auditLogs    AuditLog[]
+}
+
+model Client {
+  id         String         @id @default(uuid()) @db.Uuid
+  name       String
+  slug       String         @unique
+  brandColor String         @default("#ff6a3c")
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  users      UserClient[]
+  channels   Channel[]
+  media      Media[]
+  playlists  Playlist[]
+  schedules  Schedule[]
+  devices    Device[]
+}
+
+model UserClient {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  clientId  String   @db.Uuid
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientId])
+  @@index([clientId])
+}
+
+model Channel {
+  id          String     @id @default(uuid()) @db.Uuid
+  clientId    String     @db.Uuid
+  name        String
+  slug        String
+  description String     @default("")
+  orientation String     @default("landscape")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  client      Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  playlists   Playlist[]
+  schedules   Schedule[]
+  devices     Device[]
+
+  @@unique([clientId, slug])
+  @@index([clientId])
+}
+
+model Media {
+  id              String         @id @default(uuid()) @db.Uuid
+  clientId        String         @db.Uuid
+  title           String
+  kind            MediaKind
+  fileName        String
+  originalName    String
+  mimeType        String
+  durationSeconds Int            @default(10)
+  hasAudio        Boolean        @default(false)
+  status          MediaStatus    @default(published)
+  tags            String         @default("")
+  checksum        String         @default("")
+  contentVersion  Int            @default(1)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  client          Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  playlistItems   PlaylistItem[]
+
+  @@index([clientId])
+  @@index([status])
+}
+
+model Playlist {
+  id        String         @id @default(uuid()) @db.Uuid
+  clientId  String         @db.Uuid
+  channelId String?        @db.Uuid
+  name      String
+  isActive  Boolean        @default(true)
+  notes     String         @default("")
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  client    Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel   Channel?       @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  items     PlaylistItem[]
+  schedules Schedule[]
+
+  @@index([clientId])
+  @@index([channelId])
+  @@index([isActive])
+}
+
+model PlaylistItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  playlistId    String   @db.Uuid
+  mediaId       String   @db.Uuid
+  sortOrder     Int      @default(10)
+  loopCount     Int      @default(1)
+  volumePercent Int      @default(100)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  playlist      Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  media         Media    @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@index([playlistId, sortOrder])
+  @@index([mediaId])
+}
+
+model Schedule {
+  id         String   @id @default(uuid()) @db.Uuid
+  clientId   String   @db.Uuid
+  channelId  String   @db.Uuid
+  playlistId String   @db.Uuid
+  label      String
+  startDate  String   @default("")
+  endDate    String   @default("")
+  startTime  String   @default("00:00")
+  endTime    String   @default("23:59")
+  daysOfWeek String   @default("0,1,2,3,4,5,6")
+  priority   Int      @default(100)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel    Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([channelId])
+  @@index([playlistId])
+  @@index([isActive, priority])
+}
+
+model Device {
+  id                  String               @id @default(uuid()) @db.Uuid
+  serial              String               @unique
+  secret              String
+  approvalStatus      DeviceApprovalStatus @default(pending)
+  name                String               @default("Android TV")
+  clientId            String?              @db.Uuid
+  channelId           String?              @db.Uuid
+  locationLabel       String               @default("")
+  notes               String               @default("")
+  platform            String               @default("android")
+  appVersion          String               @default("")
+  deviceModel         String               @default("Android TV")
+  desiredDisplayState DeviceDisplayState   @default(active)
+  volumePercent       Int                  @default(80)
+  playerState         DevicePlayerState    @default(waiting)
+  playerMessage       String               @default("")
+  activeItemTitle     String               @default("")
+  lastSeenAt          DateTime?
+  lastSyncAt          DateTime?
+  lastPlaybackAt      DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  client              Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  channel             Channel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
+
+  @@index([approvalStatus])
+  @@index([clientId])
+  @@index([channelId])
+  @@index([lastSeenAt])
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  tokenHash String   @unique
+  userId    String   @db.Uuid
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id          String      @id @default(uuid()) @db.Uuid
+  actorUserId String?     @db.Uuid
+  action      AuditAction
+  entityType  String
+  entityId    String
+  ipAddress   String      @default("")
+  userAgent   String      @default("")
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+  actor       User?       @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
