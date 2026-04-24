@@ -1,6 +1,9 @@
 {
   "name": "digital-signage",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "workspaces": [
     "apps/cms",
     "apps/player",
