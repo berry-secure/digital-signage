@@ -29,6 +29,8 @@ export type MediaKind = "video" | "image" | "audio";
 export type PlaybackEventType = "audio" | "visual";
 export type PlaybackEventTriggerMode = "items" | "minutes";
 export type DeviceLogSeverity = "info" | "warn" | "error";
+export type ProofOfPlayStatus = "started" | "finished" | "error";
+export type PlaybackSourceType = "playlist" | "event";
 
 export interface UserRecord {
   id: string;
@@ -69,6 +71,8 @@ export interface MediaRecord {
   hasAudio: boolean;
   status: "draft" | "published";
   tags: string;
+  checksum: string;
+  contentVersion: number;
   url: string;
   createdAt: string;
   updatedAt: string;
@@ -182,6 +186,38 @@ export interface DeviceLogRecord {
   deviceSerial: string;
   clientId: string;
   clientName: string;
+  channelId: string;
+  channelName: string;
+}
+
+export interface ProofOfPlayRecord {
+  id: string;
+  deviceId: string;
+  status: ProofOfPlayStatus;
+  sourceType: PlaybackSourceType;
+  playlistId: string;
+  scheduleId: string;
+  mediaId: string;
+  playbackItemId: string;
+  eventId: string;
+  mediaTitle: string;
+  mediaKind: MediaKind;
+  startedAt: string;
+  finishedAt: string;
+  occurredAt: string;
+  durationSeconds: number;
+  checksum: string;
+  contentVersion: number;
+  errorMessage: string;
+  appVersion: string;
+  createdAt: string;
+  updatedAt: string;
+  deviceName: string;
+  deviceSerial: string;
+  clientId: string;
+  clientName: string;
+  channelId: string;
+  channelName: string;
 }
 
 export interface DeviceCommandRecord {
@@ -204,6 +240,9 @@ export interface DeviceCommandRecord {
 export interface InstallationInfo {
   apiBaseUrl: string;
   apkUrl: string;
+  storageMode?: "json" | "prisma";
+  databaseConfigured?: boolean;
+  dataDir?: string;
 }
 
 export interface BootstrapPayload {
@@ -219,4 +258,5 @@ export interface BootstrapPayload {
   deviceCommands: DeviceCommandRecord[];
   playbackEvents: PlaybackEventRecord[];
   deviceLogs: DeviceLogRecord[];
+  proofOfPlay: ProofOfPlayRecord[];
 }

@@ -68,13 +68,13 @@ Bezpieczna kolejność przejścia z JSON storage na PostgreSQL:
 
 2. Utwórz PostgreSQL resource w Coolify.
 3. Skopiuj connection string do `DATABASE_URL`.
-4. Przed deployem z `DATABASE_URL` uruchom migrację schematu:
+4. Przed deployem z `DATABASE_URL` uruchom migrację schematu jako one-off command w tym samym środowisku/envie:
 
 ```bash
-npm run prisma:migrate:dev --workspace @ds/server
+npm run prisma:migrate:deploy --workspace @ds/server
 ```
 
-Na produkcji docelowo lepszy będzie osobny deploy command / one-off command Coolify z tym samym `DATABASE_URL`.
+Na produkcji używamy `migrate deploy`, nie `migrate dev`. `migrate dev` jest tylko lokalnie do tworzenia nowych migracji.
 
 5. Najpierw zrób dry-run importu obecnego JSON:
 
@@ -138,7 +138,7 @@ Flow pozostaje bez zmian:
 ## 6. Ważne Zasady
 
 - Nie zmieniaj domeny produkcyjnej teraz; trzymaj `PUBLIC_BASE_URL=https://cms.berry-secure.pl`.
-- Nie ustawiaj `DATABASE_URL` bez migracji schematu i dry-run importu JSON.
+- Nie ustawiaj `DATABASE_URL` bez `npm run prisma:migrate:deploy --workspace @ds/server` i dry-run importu JSON.
 - Nie uruchamiaj `migrate:json:postgres -- --apply` bez backupu `/data`.
 - Uploady zostają na trwałym wolumenie `/data/uploads`, dopóki nie przejdziemy na storage S3-ready.
 - `blackout` to aplikacyjne wygaszenie ekranu, nie gwarantowane fizyczne wyłączenie panelu TV.

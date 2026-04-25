@@ -41,9 +41,16 @@ import {
   getDeviceConnection,
   getDeviceType,
   getDeviceTypeLabel,
+  getOfflineDeviceAlerts,
   summarizeDeviceFleet,
   type DeviceCenterFilters
 } from "./deviceCenter";
+import {
+  buildProofOfPlayCsv,
+  filterProofOfPlay,
+  summarizeProofOfPlay,
+  type ProofOfPlayFilters
+} from "./proofOfPlay";
 import type {
   BootstrapPayload,
   ChannelRecord,
@@ -55,6 +62,7 @@ import type {
   MediaKind,
   MediaRecord,
   PlaybackEventRecord,
+  ProofOfPlayRecord,
   PlaylistRecord,
   ScheduleRecord,
   UserRecord,
@@ -71,6 +79,7 @@ type SectionKey =
   | "events"
   | "schedule"
   | "devices"
+  | "reports"
   | "logs"
   | "install";
 type FlashMessage = { kind: "success" | "error"; text: string };
@@ -132,6 +141,8 @@ type DeviceLogFilters = {
   query: string;
 };
 
+type ProofReportFilters = ProofOfPlayFilters;
+
 type PlaylistFormState = {
   id: string;
   clientId: string;
@@ -187,6 +198,7 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "events", label: "Eventy", hint: "komunikaty w emisji" },
   { key: "schedule", label: "Harmonogramy", hint: "emisja wg czasu" },
   { key: "devices", label: "Urządzenia", hint: "seriale i approval" },
+  { key: "reports", label: "Raporty", hint: "proof of play" },
   { key: "logs", label: "Logi", hint: "błędy playerów" },
   { key: "install", label: "Instalacja", hint: "APK i adres serwera" }
 ];
@@ -242,7 +254,8 @@ const emptyBootstrap: BootstrapPayload = {
   devices: [],
   deviceCommands: [],
   playbackEvents: [],
-  deviceLogs: []
+  deviceLogs: [],
+  proofOfPlay: []
 };
 
 const emptyUserForm: UserFormState = {
@@ -375,6 +388,12 @@ function App() {
     component: "",
     query: ""
   });
+  const [proofReportFilters, setProofReportFilters] = useState<ProofReportFilters>({
+    clientId: "",
+    deviceId: "",
+    status: "",
+    query: ""
+  });
   const [deviceCommandDrafts, setDeviceCommandDrafts] = useState<Record<string, DeviceCommandType>>({});
 
   const clients = dashboard.clients;
@@ -386,10 +405,12 @@ function App() {
   const deviceCommands = dashboard.deviceCommands || [];
   const playbackEvents = dashboard.playbackEvents || [];
   const deviceLogs = dashboard.deviceLogs || [];
+  const proofOfPlay = dashboard.proofOfPlay || [];
   const filteredDevices = useMemo(() => filterDeviceCenterDevices(devices, deviceFilters), [devices, deviceFilters]);
   const pendingDevices = filteredDevices.filter((device) => device.approvalStatus === "pending");
   const approvedDevices = filteredDevices.filter((device) => device.approvalStatus === "approved");
   const deviceFleet = useMemo(() => summarizeDeviceFleet(filteredDevices), [filteredDevices]);
+  const offlineAlerts = useMemo(() => getOfflineDeviceAlerts(devices), [devices]);
   const deviceFormIsPending = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "pending");
   const deviceFormIsApproved = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "approved");
   const latestCommandByDevice = useMemo(() => buildLatestCommandLookup(deviceCommands), [deviceCommands]);
@@ -397,6 +418,11 @@ function App() {
     () => filterDeviceLogs(deviceLogs, devices, deviceLogFilters),
     [deviceLogFilters, deviceLogs, devices]
   );
+  const filteredProofOfPlay = useMemo(
+    () => filterProofOfPlay(proofOfPlay, proofReportFilters),
+    [proofOfPlay, proofReportFilters]
+  );
+  const proofSummary = useMemo(() => summarizeProofOfPlay(filteredProofOfPlay), [filteredProofOfPlay]);
 
   const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
   const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
@@ -667,6 +693,17 @@ function App() {
     );
   }
 
+  function downloadProofOfPlayCsv() {
+    const csv = buildProofOfPlayCsv(filteredProofOfPlay);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `proof-of-play-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   function toggleScheduleDay(day: number) {
     const current = new Set(
       scheduleForm.daysOfWeek
@@ -691,6 +728,8 @@ function App() {
     { label: "Playlisty", value: playlists.length, hint: "kolejki treści" },
     { label: "Eventy", value: playbackEvents.length, hint: "komunikaty w emisji" },
     { label: "Harmonogramy", value: schedules.length, hint: "aktywne reguły" },
+    { label: "Proof of Play", value: proofOfPlay.length, hint: "ostatnie zdarzenia emisji" },
+    { label: "Alerty offline", value: offlineAlerts.length, hint: "ponad 5 minut bez heartbeat" },
     { label: "Logi błędów", value: deviceLogs.filter((log) => log.severity === "error").length, hint: "ostatnie raporty playerów" },
     { label: "Urządzenia online", value: approvedDevices.filter((device) => device.online).length, hint: "serca playerów" }
   ];
@@ -803,6 +842,37 @@ function App() {
                 </article>
               ))}
             </div>
+
+            {offlineAlerts.length ? (
+              <article className="panel offline-alert-panel">
+                <header className="panel-header">
+                  <h3>Alerty offline</h3>
+                  <span>{offlineAlerts.length} urządzeń po progu 5 minut</span>
+                </header>
+                <div className="list-stack">
+                  {offlineAlerts.slice(0, 5).map((alert) => (
+                    <button
+                      key={alert.device.id}
+                      className="list-card interactive"
+                      type="button"
+                      onClick={() => beginDeviceEdit(alert.device)}
+                    >
+                      <div>
+                        <strong>{alert.device.name || alert.device.serial}</strong>
+                        <span>
+                          {alert.device.clientName || "bez klienta"} · {alert.device.channelName || "bez kanału"} ·{" "}
+                          {alert.device.serial}
+                        </span>
+                      </div>
+                      <div className="align-right">
+                        <span className="status-pill offline">offline</span>
+                        <small>{alert.minutesOffline} min bez heartbeat</small>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            ) : null}
 
             <div className="card-grid two-columns">
               <article className="panel">
@@ -2673,6 +2743,151 @@ function App() {
           </section>
         ) : null}
 
+        {activeSection === "reports" ? (
+          <section className="section-stack">
+            <div className="panel device-filter-bar report-filter-bar">
+              <Field label="Klient" htmlFor="proof-filter-client">
+                <select
+                  id="proof-filter-client"
+                  name="proof-filter-client"
+                  value={proofReportFilters.clientId}
+                  onChange={(event) =>
+                    setProofReportFilters((current) => ({ ...current, clientId: event.target.value, deviceId: "" }))
+                  }
+                >
+                  <option value="">Wszyscy klienci</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Urządzenie" htmlFor="proof-filter-device">
+                <select
+                  id="proof-filter-device"
+                  name="proof-filter-device"
+                  value={proofReportFilters.deviceId}
+                  onChange={(event) => setProofReportFilters((current) => ({ ...current, deviceId: event.target.value }))}
+                >
+                  <option value="">Wszystkie urządzenia</option>
+                  {devices
+                    .filter((device) => !proofReportFilters.clientId || device.clientId === proofReportFilters.clientId)
+                    .map((device) => (
+                      <option key={device.id} value={device.id}>
+                        {device.name || device.serial}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+              <Field label="Status" htmlFor="proof-filter-status">
+                <select
+                  id="proof-filter-status"
+                  name="proof-filter-status"
+                  value={proofReportFilters.status}
+                  onChange={(event) =>
+                    setProofReportFilters((current) => ({
+                      ...current,
+                      status: event.target.value as ProofReportFilters["status"]
+                    }))
+                  }
+                >
+                  <option value="">Wszystkie</option>
+                  <option value="started">Started</option>
+                  <option value="finished">Finished</option>
+                  <option value="error">Error</option>
+                </select>
+              </Field>
+              <Field label="Szukaj" htmlFor="proof-filter-query">
+                <input
+                  id="proof-filter-query"
+                  name="proof-filter-query"
+                  type="search"
+                  value={proofReportFilters.query}
+                  onChange={(event) => setProofReportFilters((current) => ({ ...current, query: event.target.value }))}
+                  placeholder="Media, serial, checksum, playlist..."
+                />
+              </Field>
+              <button className="secondary-button" type="button" onClick={downloadProofOfPlayCsv} disabled={!filteredProofOfPlay.length}>
+                CSV
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setProofReportFilters({ clientId: "", deviceId: "", status: "", query: "" })}
+                disabled={
+                  !proofReportFilters.clientId &&
+                  !proofReportFilters.deviceId &&
+                  !proofReportFilters.status &&
+                  !proofReportFilters.query
+                }
+              >
+                Wyczyść
+              </button>
+            </div>
+
+            <div className="stats-grid device-stats">
+              <article className="stat-card">
+                <span>Zdarzenia</span>
+                <strong>{proofSummary.total}</strong>
+                <small>{filteredProofOfPlay.length} / {proofOfPlay.length} po filtrach</small>
+              </article>
+              <article className="stat-card">
+                <span>Started</span>
+                <strong>{proofSummary.started}</strong>
+                <small>raport startu assetu</small>
+              </article>
+              <article className="stat-card">
+                <span>Finished</span>
+                <strong>{proofSummary.finished}</strong>
+                <small>raport zakończenia assetu</small>
+              </article>
+              <article className="stat-card">
+                <span>Error</span>
+                <strong>{proofSummary.error}</strong>
+                <small>{proofSummary.uniqueDevices} urządzeń · {proofSummary.uniqueMedia} mediów</small>
+              </article>
+            </div>
+
+            <article className="panel">
+              <header className="panel-header">
+                <h3>Proof of Play</h3>
+                <span>ostatnie {proofOfPlay.length} zdarzeń</span>
+              </header>
+              {filteredProofOfPlay.length ? (
+                <div className="list-stack">
+                  {filteredProofOfPlay.map((record) => (
+                    <div key={record.id} className="list-card proof-card">
+                      <div>
+                        <strong>{record.mediaTitle || record.mediaId || "nieznane media"}</strong>
+                        <span>
+                          {record.deviceName || record.deviceSerial || "nieznane urządzenie"} · {record.clientName || "bez klienta"} ·{" "}
+                          {record.channelName || "bez kanału"}
+                        </span>
+                        <small>
+                          {record.sourceType} · {record.mediaKind} · v{record.contentVersion} ·{" "}
+                          {record.durationSeconds || 0}s · {formatDateTime(record.occurredAt)}
+                        </small>
+                        <code className="log-stack">
+                          checksum {record.checksum || "brak"} · playlist {record.playlistId || "brak"} · schedule{" "}
+                          {record.scheduleId || "brak"}
+                        </code>
+                        {record.errorMessage ? <small>{record.errorMessage}</small> : null}
+                      </div>
+                      <div className="align-right">
+                        <span className={`status-pill ${proofStatusClass(record.status)}`}>{record.status}</span>
+                        <small>APK {record.appVersion || "brak"}</small>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState text="Brak zdarzeń Proof of Play pasujących do filtrów." />
+              )}
+            </article>
+          </section>
+        ) : null}
+
         {activeSection === "logs" ? (
           <section className="section-stack">
             <div className="panel device-filter-bar logs-filter-bar">
@@ -2806,6 +3021,14 @@ function App() {
                     {dashboard.installation.apkUrl}
                   </a>
                 </div>
+                <div className="info-block">
+                  <strong>Storage</strong>
+                  <code>
+                    {dashboard.installation.storageMode === "prisma"
+                      ? "PostgreSQL / Prisma"
+                      : `JSON ${dashboard.installation.dataDir ? `(${dashboard.installation.dataDir})` : ""}`}
+                  </code>
+                </div>
               </article>
 
               <article className="panel">
@@ -2889,6 +3112,16 @@ function logSeverityClass(severity: "info" | "warn" | "error") {
     return "pending";
   }
   return "neutral";
+}
+
+function proofStatusClass(status: ProofOfPlayRecord["status"]) {
+  if (status === "finished") {
+    return "online";
+  }
+  if (status === "error") {
+    return "offline";
+  }
+  return "pending";
 }
 
 function buildLatestCommandLookup(commands: DeviceCommandRecord[]) {

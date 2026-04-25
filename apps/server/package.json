@@ -10,6 +10,7 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "migrate:json:postgres": "tsx src/tools/migrateJsonToPrisma.ts",
     "start": "node server.js"

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -405,6 +406,166 @@ describe("MVP API contract", () => {
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
+
+  it("records proof of play with media version metadata and exposes it to CMS reports", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-proof-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "proof-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Proof Owner",
+      publicBaseUrl: "https://cms.example.test"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "proof-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Proof Client" });
+    const channel = await request(isolatedApp)
+      .post("/api/channels")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Main Channel" });
+    const media = await uploadTestMedia(isolatedApp, ownerToken, {
+      clientId: client.body.client.id,
+      title: "Proof Clip",
+      kind: "video",
+      fileName: "proof.mp4",
+      mimeType: "video/mp4",
+      durationSeconds: 45
+    });
+    const expectedChecksum = createHash("sha256").update("Proof Clip fixture").digest("hex");
+
+    assert.equal(media.body.media.checksum, expectedChecksum);
+    assert.equal(media.body.media.contentVersion, 1);
+
+    const playlist = await request(isolatedApp)
+      .post("/api/playlists")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        name: "Proof Playlist",
+        isActive: true,
+        notes: ""
+      });
+
+    await request(isolatedApp)
+      .post(`/api/playlists/${playlist.body.playlist.id}/items`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        mediaId: media.body.media.id,
+        sortOrder: 10,
+        loopCount: 1,
+        volumePercent: 80
+      });
+
+    const playerSession = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKPROOF001",
+        secret: "proof-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "waiting"
+      });
+
+    await request(isolatedApp)
+      .post("/api/devices/approve")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        deviceId: playerSession.body.device.id,
+        serial: "MKPROOF001",
+        name: "Proof Screen",
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        locationLabel: "Lobby",
+        notes: "",
+        playerType: "video_standard",
+        desiredDisplayState: "active",
+        volumePercent: 80
+      });
+
+    const playback = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKPROOF001",
+        secret: "proof-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "idle"
+      });
+
+    const queueEntry = playback.body.playback.queue[0];
+    assert.equal(queueEntry.mediaId, media.body.media.id);
+    assert.equal(queueEntry.checksum, expectedChecksum);
+    assert.equal(queueEntry.contentVersion, 1);
+
+    const started = await request(isolatedApp)
+      .post("/api/player/proof-of-play")
+      .send({
+        serial: "MKPROOF001",
+        secret: "proof-secret",
+        status: "started",
+        playlistId: queueEntry.playlistId,
+        scheduleId: queueEntry.scheduleId,
+        mediaId: queueEntry.mediaId,
+        playbackItemId: queueEntry.id,
+        sourceType: queueEntry.sourceType,
+        mediaTitle: queueEntry.title,
+        mediaKind: queueEntry.kind,
+        startedAt: "2026-04-25T00:00:00.000Z",
+        durationSeconds: queueEntry.durationSeconds,
+        checksum: queueEntry.checksum,
+        contentVersion: queueEntry.contentVersion,
+        appVersion: "1.0.1"
+      });
+
+    assert.equal(started.status, 201);
+    assert.equal(started.body.proofOfPlay.status, "started");
+    assert.equal(started.body.proofOfPlay.deviceName, "Proof Screen");
+    assert.equal(started.body.proofOfPlay.clientName, "Proof Client");
+    assert.equal(started.body.proofOfPlay.channelName, "Main Channel");
+    assert.equal(started.body.proofOfPlay.checksum, expectedChecksum);
+
+    const finished = await request(isolatedApp)
+      .post("/api/player/proof-of-play")
+      .send({
+        serial: "MKPROOF001",
+        secret: "proof-secret",
+        status: "finished",
+        playlistId: queueEntry.playlistId,
+        scheduleId: queueEntry.scheduleId,
+        mediaId: queueEntry.mediaId,
+        playbackItemId: queueEntry.id,
+        sourceType: queueEntry.sourceType,
+        mediaTitle: queueEntry.title,
+        mediaKind: queueEntry.kind,
+        finishedAt: "2026-04-25T00:00:45.000Z",
+        durationSeconds: queueEntry.durationSeconds,
+        checksum: queueEntry.checksum,
+        contentVersion: queueEntry.contentVersion,
+        appVersion: "1.0.1"
+      });
+
+    assert.equal(finished.status, 201);
+    assert.equal(finished.body.proofOfPlay.status, "finished");
+
+    const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
+    assert.equal(bootstrap.body.proofOfPlay.length, 2);
+    assert.deepEqual(
+      bootstrap.body.proofOfPlay.map((entry) => entry.status).sort(),
+      ["finished", "started"]
+    );
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
 });
 
 function uploadTestMedia(
@@ -447,7 +608,8 @@ function createFakePrisma(calls: string[]) {
     device: [],
     deviceCommand: [],
     playbackEvent: [],
-    deviceLog: []
+    deviceLog: [],
+    proofOfPlay: []
   };
 
   const model = (name: string) => ({
@@ -478,6 +640,7 @@ function createFakePrisma(calls: string[]) {
     deviceCommand: model("deviceCommand"),
     playbackEvent: model("playbackEvent"),
     deviceLog: model("deviceLog"),
+    proofOfPlay: model("proofOfPlay"),
     session: model("session"),
     auditLog: model("auditLog"),
     async $transaction(callback: (tx: unknown) => Promise<void>) {

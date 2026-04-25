@@ -24,6 +24,7 @@ function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const imageTimerRef = useRef<number | null>(null);
+  const proofStartRef = useRef("");
   const heartbeatRef = useRef({
     playerState: "waiting" as PlayerState,
     playerMessage: "Player startuje i czeka na pierwszą odpowiedź serwera.",
@@ -34,6 +35,7 @@ function App() {
   const queue = session?.playback.queue ?? [];
   const currentItem = queue[currentIndex] ?? null;
   const queueSignature = useMemo(() => queue.map((item) => item.id).join("|"), [queue]);
+  const playbackInstanceKey = currentItem ? `${queueSignature}:${currentIndex}:${currentItem.id}` : "";
   const deviceTitle = device?.name || "Android TV";
   const playbackLabel = session?.playback.label || "";
   const showHud = !(phase === "playing" && currentItem && device?.desiredDisplayState !== "blackout");
@@ -49,6 +51,19 @@ function App() {
   useEffect(() => {
     setCurrentIndex(0);
   }, [queueSignature]);
+
+  useEffect(() => {
+    if (!playbackInstanceKey || phase !== "playing" || !currentItem || device?.desiredDisplayState === "blackout") {
+      return;
+    }
+
+    if (proofStartRef.current === playbackInstanceKey) {
+      return;
+    }
+
+    proofStartRef.current = playbackInstanceKey;
+    void reportProofOfPlay("started", currentItem);
+  }, [currentItem, device?.desiredDisplayState, phase, playbackInstanceKey]);
 
   useEffect(() => {
     void syncSession("start");
@@ -69,7 +84,7 @@ function App() {
     }
 
     imageTimerRef.current = window.setTimeout(() => {
-      advanceQueue();
+      finishCurrentAndAdvance("finished");
     }, Math.max(currentItem.durationSeconds, 3) * 1000);
 
     return () => {
@@ -248,6 +263,37 @@ function App() {
     }
   }
 
+  async function reportProofOfPlay(status: "started" | "finished" | "error", item: PlaybackEntry, errorMessage = "") {
+    try {
+      await fetch(`${apiBaseUrl}/api/player/proof-of-play`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serial: identity.serial,
+          secret: identity.secret,
+          status,
+          playlistId: item.playlistId || "",
+          scheduleId: item.scheduleId || "",
+          mediaId: item.mediaId || "",
+          playbackItemId: item.id,
+          sourceType: item.sourceType || "playlist",
+          eventId: item.eventId || "",
+          mediaTitle: item.title,
+          mediaKind: item.kind,
+          startedAt: status === "started" ? new Date().toISOString() : "",
+          finishedAt: status === "finished" || status === "error" ? new Date().toISOString() : "",
+          durationSeconds: item.durationSeconds,
+          checksum: item.checksum || "",
+          contentVersion: item.contentVersion || 1,
+          errorMessage,
+          appVersion
+        })
+      });
+    } catch {
+      // Proof of Play is best-effort; playback must not freeze if reporting fails.
+    }
+  }
+
   async function resetApproval() {
     setBusy(true);
     try {
@@ -294,6 +340,14 @@ function App() {
       }
       return (current + 1) % queue.length;
     });
+  }
+
+  function finishCurrentAndAdvance(status: "finished" | "error", errorMessage = "") {
+    const item = currentItem;
+    if (item) {
+      void reportProofOfPlay(status, item, errorMessage);
+    }
+    advanceQueue();
   }
 
   const waitingScreen = (
@@ -389,16 +443,17 @@ function App() {
               playsInline
               autoPlay
               preload="auto"
-              onEnded={advanceQueue}
+              onEnded={() => finishCurrentAndAdvance("finished")}
               onError={() => {
-                setStatusMessage(`Nie udało się odtworzyć pliku ${currentItem.title}.`);
+                const message = `Nie udało się odtworzyć pliku ${currentItem.title}.`;
+                setStatusMessage(message);
                 void reportDeviceLog({
                   severity: "error",
                   component: "playback",
-                  message: `Nie udało się odtworzyć pliku ${currentItem.title}.`,
-                  context: { itemId: currentItem.id, kind: currentItem.kind, eventId: currentItem.eventId || "" }
+                  message,
+                  context: { itemId: currentItem.id, mediaId: currentItem.mediaId || "", kind: currentItem.kind, eventId: currentItem.eventId || "" }
                 });
-                advanceQueue();
+                finishCurrentAndAdvance("error", message);
               }}
             />
           ) : currentItem.kind === "image" ? (
@@ -408,14 +463,15 @@ function App() {
               src={currentItem.url}
               alt={currentItem.title}
               onError={() => {
-                setStatusMessage(`Nie udało się wczytać obrazu ${currentItem.title}.`);
+                const message = `Nie udało się wczytać obrazu ${currentItem.title}.`;
+                setStatusMessage(message);
                 void reportDeviceLog({
                   severity: "error",
                   component: "playback",
-                  message: `Nie udało się wczytać obrazu ${currentItem.title}.`,
-                  context: { itemId: currentItem.id, kind: currentItem.kind, eventId: currentItem.eventId || "" }
+                  message,
+                  context: { itemId: currentItem.id, mediaId: currentItem.mediaId || "", kind: currentItem.kind, eventId: currentItem.eventId || "" }
                 });
-                advanceQueue();
+                finishCurrentAndAdvance("error", message);
               }}
             />
           ) : (
@@ -425,16 +481,17 @@ function App() {
                 src={currentItem.url}
                 autoPlay
                 preload="auto"
-                onEnded={advanceQueue}
+                onEnded={() => finishCurrentAndAdvance("finished")}
                 onError={() => {
-                  setStatusMessage(`Nie udało się odtworzyć audio ${currentItem.title}.`);
+                  const message = `Nie udało się odtworzyć audio ${currentItem.title}.`;
+                  setStatusMessage(message);
                   void reportDeviceLog({
                     severity: "error",
                     component: "playback",
-                    message: `Nie udało się odtworzyć audio ${currentItem.title}.`,
-                    context: { itemId: currentItem.id, kind: currentItem.kind, eventId: currentItem.eventId || "" }
+                    message,
+                    context: { itemId: currentItem.id, mediaId: currentItem.mediaId || "", kind: currentItem.kind, eventId: currentItem.eventId || "" }
                   });
-                  advanceQueue();
+                  finishCurrentAndAdvance("error", message);
                 }}
               />
               <span className="eyebrow">Komunikat audio</span>
