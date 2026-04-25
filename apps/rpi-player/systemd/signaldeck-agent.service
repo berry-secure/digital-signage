@@ -1,0 +1,19 @@
+[Unit]
+Description=Signal Deck Raspberry Pi Video Premium Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/opt/signaldeck/apps/rpi-player
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/signaldeck/venv/bin/python -m signaldeck_agent
+Restart=always
+RestartSec=3
+NotifyAccess=main
+WatchdogSec=30
+
+[Install]
+WantedBy=multi-user.target

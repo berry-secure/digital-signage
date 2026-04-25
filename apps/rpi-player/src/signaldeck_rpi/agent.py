@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import logging
+import os
+import socket
 import time
 
 from .cache import MediaCache
@@ -111,9 +113,25 @@ def create_runtime(
 
 
 def run_forever(runtime: AgentRuntime) -> None:
+    notify_systemd("READY=1")
     while True:
         runtime.poll_once()
+        notify_systemd("WATCHDOG=1")
         time.sleep(max(runtime.config.heartbeat_interval_seconds, 1))
+
+
+def notify_systemd(message: str) -> None:
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+            client.connect(address)
+            client.sendall(message.encode("utf-8"))
+    except OSError:
+        LOGGER.debug("systemd notify failed", exc_info=True)
 
 
 def _queue_from_response(response: dict[str, Any]) -> list[dict[str, Any]]:

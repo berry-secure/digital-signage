@@ -1,0 +1,15 @@
+[Unit]
+Description=Signal Deck Local Setup WebUI
+After=network.target
+
+[Service]
+Type=simple
+User=signaldeck
+Group=signaldeck
+WorkingDirectory=/opt/signaldeck/apps/rpi-player
+ExecStart=/opt/signaldeck/venv/bin/python -m signaldeck_webui --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

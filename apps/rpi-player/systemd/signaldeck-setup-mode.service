@@ -1,0 +1,13 @@
+[Unit]
+Description=Signal Deck Setup Mode Hotspot
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash -lc 'test -f /boot/firmware/SIGNALDECK_LOCK || /usr/bin/nmcli connection up SignalDeck-Setup || true'
+ExecStop=/usr/bin/bash -lc '/usr/bin/nmcli connection down SignalDeck-Setup || true'
+
+[Install]
+WantedBy=multi-user.target
