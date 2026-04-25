@@ -64,13 +64,13 @@ button {
 .hero-stage {
   display: grid;
   place-items: center;
-  padding: 8rem 3rem 9rem;
+  padding: 6.5rem 2.4rem 7.5rem;
 }
 
 .hero-card {
-  width: min(100%, 72rem);
-  padding: 2rem 2.4rem;
-  border-radius: 2rem;
+  width: min(100%, 64rem);
+  padding: 1.55rem 1.8rem;
+  border-radius: 1rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(160deg, rgba(13, 22, 34, 0.94), rgba(20, 35, 58, 0.78));
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
@@ -78,48 +78,51 @@ button {
 }
 
 .hero-card.compact {
-  width: min(100%, 48rem);
+  width: min(100%, 46rem);
 }
 
 .hero-card h1 {
-  margin: 0.3rem 0 0.75rem;
-  font-size: clamp(3.6rem, 11vw, 8.5rem);
-  letter-spacing: 0.04em;
-  line-height: 0.95;
+  margin: 0.25rem 0 0.65rem;
+  font-size: clamp(2.1rem, 5.2vw, 4.4rem);
+  letter-spacing: 0;
+  line-height: 1.02;
+  overflow-wrap: anywhere;
 }
 
 .hero-card.compact h1 {
-  font-size: clamp(2rem, 6vw, 4.6rem);
+  font-size: clamp(1.65rem, 3.8vw, 3rem);
 }
 
 .hero-card p {
-  margin: 0 auto 1.4rem;
-  max-width: 56rem;
+  margin: 0 auto 1.15rem;
+  max-width: 52rem;
   color: #d2dff2;
-  font-size: clamp(1.15rem, 2vw, 1.8rem);
+  font-size: clamp(0.95rem, 1.45vw, 1.25rem);
+  line-height: 1.38;
 }
 
 .eyebrow {
   display: inline-block;
-  font-size: 0.88rem;
-  letter-spacing: 0.16em;
+  font-size: 0.76rem;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: #ffb48f;
 }
 
 .hero-meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.3rem;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 1.05rem;
 }
 
 .hero-meta div {
   display: grid;
-  gap: 0.3rem;
-  padding: 1rem;
-  border-radius: 1.2rem;
+  gap: 0.22rem;
+  padding: 0.72rem 0.82rem;
+  border-radius: 0.8rem;
   background: rgba(255, 255, 255, 0.05);
+  min-width: 0;
 }
 
 .hero-meta strong,
@@ -129,10 +132,14 @@ button {
 
 .hero-meta strong {
   color: #eef5ff;
+  font-size: 0.9rem;
 }
 
 .hero-meta span {
   color: #b6c8e3;
+  font-size: 0.92rem;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -146,11 +153,12 @@ button {
 
 .ghost-button,
 .secondary-button {
-  border-radius: 999px;
-  padding: 0.92rem 1.3rem;
+  border-radius: 0.75rem;
+  padding: 0.72rem 1rem;
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #eff6ff;
   background: rgba(255, 255, 255, 0.08);
+  font-size: 0.92rem;
 }
 
 .ghost-button:hover,
@@ -166,8 +174,8 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 1.15rem;
-  border-radius: 1.35rem;
+  padding: 0.78rem 0.95rem;
+  border-radius: 0.85rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(6, 12, 21, 0.72);
   backdrop-filter: blur(18px);
@@ -186,6 +194,7 @@ button {
 .status-block {
   display: grid;
   gap: 0.22rem;
+  min-width: 0;
 }
 
 .identity-block strong,
@@ -197,12 +206,15 @@ button {
 
 .identity-block strong,
 .status-block strong {
-  font-size: 1.2rem;
+  font-size: 1rem;
 }
 
 .identity-block small,
 .status-block small {
   color: #a9bcd8;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .badge {
@@ -215,7 +227,7 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.08);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   font-size: 0.78rem;
 }
 
@@ -240,15 +252,30 @@ button {
   gap: 0.85rem;
   flex-wrap: wrap;
   color: #b5c6df;
+  font-size: 0.86rem;
+}
+
+.serial-code {
+  font-family: "SFMono-Regular", "Roboto Mono", "Cascadia Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-serial {
+  max-width: 100%;
+  color: #fff7ed;
+}
+
+.inline-serial {
+  font-size: 0.92em;
 }
 
 @media (max-width: 900px) {
   .hero-stage {
-    padding: 7rem 1.2rem 8rem;
+    padding: 5.8rem 1rem 6.8rem;
   }
 
   .hero-card {
-    padding: 1.5rem;
+    padding: 1.2rem;
   }
 
   .hud {
@@ -267,6 +294,60 @@ button {
   }
 
   .hero-card h1 {
-    font-size: 3rem;
+    font-size: 2.1rem;
+  }
+}
+
+@media (max-height: 650px) and (orientation: landscape) {
+  .hero-stage {
+    align-items: start;
+    padding: 5.75rem 2rem 4.6rem;
+  }
+
+  .hero-card {
+    padding: 0.85rem 1.15rem;
+  }
+
+  .hero-card h1 {
+    margin: 0.12rem 0 0.35rem;
+    font-size: clamp(2rem, 4.4vw, 3.25rem);
+    line-height: 1;
+  }
+
+  .hero-card p {
+    margin-bottom: 0.65rem;
+    font-size: 0.88rem;
+    line-height: 1.24;
+  }
+
+  .hero-meta {
+    gap: 0.48rem;
+    margin-bottom: 0.58rem;
+  }
+
+  .hero-meta div {
+    padding: 0.5rem 0.62rem;
+  }
+
+  .hero-actions,
+  .hud-actions {
+    gap: 0.55rem;
+  }
+
+  .ghost-button,
+  .secondary-button {
+    padding: 0.55rem 0.78rem;
+  }
+
+  .hud {
+    padding: 0.58rem 0.75rem;
+  }
+
+  .hud.top {
+    top: 0.65rem;
+  }
+
+  .hud.bottom {
+    bottom: 0.65rem;
   }
 }

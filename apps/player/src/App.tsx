@@ -207,7 +207,7 @@ function App() {
     <section className="hero-stage waiting">
       <div className="hero-card">
         <span className="eyebrow">Android TV Waiting Room</span>
-        <h1>{identity.serial}</h1>
+        <h1 className="serial-code hero-serial">{identity.serial}</h1>
         <p>
           To stały numer seryjny tej instalacji. W CMS wejdź do sekcji <strong>Urządzenia</strong>, wybierz pozycję z
           kolejki i kliknij <strong>Zatwierdź</strong>.
@@ -255,7 +255,7 @@ function App() {
           </div>
           <div>
             <strong>Serial</strong>
-            <span>{identity.serial}</span>
+            <span className="serial-code">{identity.serial}</span>
           </div>
         </div>
       </div>
@@ -270,7 +270,8 @@ function App() {
             <span className="eyebrow">Player</span>
             <strong>{deviceTitle}</strong>
             <small>
-              ID {identity.serial} · {device?.platform || safePlatform()} · APK {appVersion}
+              ID <span className="serial-code inline-serial">{identity.serial}</span> · {device?.platform || safePlatform()} · APK{" "}
+              {appVersion}
             </small>
           </div>
           <div className="hud-actions">
