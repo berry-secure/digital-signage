@@ -71,10 +71,47 @@ describe("MVP API contract", () => {
     assert.equal(playerSession.body.device.serial, "MK123456789AB");
     assert.equal(playerSession.body.device.approvalStatus, "pending");
     assert.equal(playerSession.body.device.platform, "android");
+    assert.equal(playerSession.body.device.playerType, "video_standard");
     assert.equal(playerSession.body.playback.mode, "idle");
     assert.deepEqual(playerSession.body.playback.queue, []);
     assert.equal(playerSession.body.playback.fallbackUsed, false);
     assert.equal(typeof playerSession.body.serverTime, "string");
+  });
+
+  it("registers Raspberry Pi Video Premium logical outputs as pending video premium devices", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-rpi-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "rpi-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Raspberry Pi Owner"
+    });
+
+    for (const suffix of ["A", "B"]) {
+      const response = await request(isolatedApp)
+        .post("/api/player/session")
+        .send({
+          serial: `MK5ABC123${suffix}`,
+          secret: `secret-${suffix}`,
+          platform: "raspberrypi",
+          appVersion: "rpi-video-premium-0.1.0",
+          deviceModel: "Raspberry Pi 5",
+          playerType: "video_premium",
+          playerState: "waiting",
+          playerMessage: `HDMI-A-${suffix === "A" ? "1" : "2"} waiting for approval`,
+          activeItemTitle: ""
+        });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.approvalStatus, "pending");
+      assert.equal(response.body.device.serial, `MK5ABC123${suffix}`);
+      assert.equal(response.body.device.platform, "raspberrypi");
+      assert.equal(response.body.device.deviceModel, "Raspberry Pi 5");
+      assert.equal(response.body.device.playerType, "video_premium");
+      assert.equal(response.body.playback.mode, "idle");
+    }
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
   });
 
   it("can boot through Prisma persistence when a database client is configured", async () => {

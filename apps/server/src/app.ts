@@ -821,7 +821,7 @@ app.post("/api/player/session", async (req, res) => {
       platform: String(req.body?.platform || "android").trim() || "android",
       appVersion: String(req.body?.appVersion || "").trim(),
       deviceModel: String(req.body?.deviceModel || "Android TV").trim() || "Android TV",
-      playerType: "video_standard",
+      playerType: normalizeDevicePlayerType(req.body?.playerType || "video_standard"),
       desiredDisplayState: "active",
       volumePercent: 80,
       playerState: "waiting",
