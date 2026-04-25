@@ -138,7 +138,9 @@ class AgentRuntime:
             )
             self.playback_controller.play(output, command)
             state.current_item_id = item_id
+            LOGGER.info("started playback on %s with item %s", output, item_id)
         except Exception as error:
+            LOGGER.error("failed to start playback on %s: %s", output, error)
             self._log(serial, secret, "error", "playback", f"failed to start playback on {output}: {error}", {"output": output, "item": item})
 
     def _log(self, serial: str, secret: str, severity: str, component: str, message: str, context: dict[str, Any]) -> None:
