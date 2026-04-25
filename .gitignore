@@ -5,6 +5,8 @@ dist
 .env.local
 .env.production
 coverage
+__pycache__
+*.pyc
 apps/server/src/generated
 apps/server/prisma/generated
 apps/player/.capacitor
