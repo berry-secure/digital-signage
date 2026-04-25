@@ -14,7 +14,7 @@ Ten dokument jest instrukcja do nowego watku, w ktorym ma powstac skrypt przygot
 
 Przygotowac skrypt instalacyjny dla swiezego Raspberry Pi OS Lite 64-bit na Raspberry Pi 5, ktory zamienia system w zarzadzany player `Video Premium`:
 
-- dwa niezalezne wyjscia HDMI jako dwa kanaly wideo,
+- dwa wyjscia HDMI jako dwa kanaly wideo, domyslnie niezalezne, ale z opcja lokalnej synchronizacji,
 - lokalny cache mediow,
 - outbound HTTPS do CMS,
 - local WebUI do konfiguracji,
@@ -43,6 +43,7 @@ Zrobic:
 - Kazde logiczne urzadzenie wysyla osobny heartbeat do `/api/player/session`.
 - Kazde logiczne urzadzenie jest zatwierdzane osobno w CMS jako `Video Premium` i przypisywane do swojego kanalu.
 - Kazde wyjscie HDMI odtwarza wlasna kolejke z CMS.
+- Agent ma miec tryb synchronizacji obu wyjsc HDMI pod menuboardy i proste videowalle.
 - Hotspot `SignalDeck-XXXX` i WebUI, gdy konfiguracji nie ma.
 - Reset setupu przez usuniecie `/boot/firmware/SIGNALDECK_LOCK`.
 - Logowanie bledow do `/api/player/logs`.
@@ -255,6 +256,48 @@ Oczekiwane nazwy:
 
 ale skrypt nie moze zakladac `card1` na sztywno. Ma wykryc connector przez suffix `HDMI-A-1` i `HDMI-A-2`.
 
+## HDMI output synchronization
+
+Dwa wyjscia HDMI w `Video Premium` beda kusily klientow do menuboardow i prostych videowalli, dlatego synchronizacja musi byc uwzgledniona od pierwszego projektu agenta.
+
+Aktualny CMS nadal widzi dwa logiczne urzadzenia, bo ma jedno `channelId` na `Device`. Synchronizacja w v1 dzieje sie lokalnie na RPi:
+
+- `HDMI-A-1` i `HDMI-A-2` pobieraja osobne sesje/playlisty z CMS.
+- Agent grupuje oba outputy w lokalny `sync_group`.
+- Agent czeka, az oba outputy maja approval, aktualna kolejke i pobrane pliki startowe w cache.
+- Agent uruchamia oba outputy z jednego monotonicznego zegara systemowego.
+- Kazdy kolejny slot playlisty jest liczony wzgledem wspolnej osi czasu, a nie tylko przez `onEnded` pojedynczego procesu.
+
+Tryby:
+
+- `independent`: domyslnie, outputy dzialaja osobno.
+- `paired_start`: outputy startuja razem po pobraniu materialow, potem kazdy idzie swoim playbackiem.
+- `clocked_playlist`: outputy startuja razem i przechodza przez kolejne sloty wedlug wspolnego timeline'u.
+
+Wymagania dla `clocked_playlist`:
+
+- Obie playlisty powinny miec taka sama liczbe slotow w petli.
+- Sloty o tym samym indeksie powinny miec taki sam `durationSeconds`.
+- Agent toleruje mala roznice, np. `sync_tolerance_ms = 250`.
+- Jesli czasy slotow albo liczba slotow sie nie zgadzaja, agent raportuje `warn` do `/api/player/logs`.
+- Przy `sync_policy = "best_effort"` agent gra dalej i probuje dosynchronizowac kolejny slot.
+- Przy `sync_policy = "strict"` agent pokazuje czarny ekran na grupie i czeka na zgodne playlisty.
+
+To nie jest broadcastowy genlock ani gwarancja frame-perfect. Celem v1 jest praktyczna synchronizacja menuboard/videowall na jednym RPi 5, najlepiej ponizej 250 ms roznicy startu slotow, z mozliwoscia dalszego strojenia po testach na fizycznym sprzecie.
+
+WebUI ma pokazac:
+
+- status sync group,
+- roznice startu ostatniego slotu per output,
+- czy playlisty sa zgodne czasowo,
+- przycisk `Resync group`.
+
+Live commands w trybie sync:
+
+- `force_sync`: synchronizuje cala grupe, jesli output nalezy do `sync_group`.
+- `force_playlist_update`: odswieza kolejki obu outputow w grupie.
+- `blackout` i `wake`: w v1 moga dzialac per output, ale WebUI powinno miec opcje `group_blackout = true`, ktora stosuje blackout/wake na oba HDMI.
+
 ## Cache
 
 Katalogi:
@@ -291,6 +334,8 @@ Minimalne ekrany:
   - base serial,
   - serial HDMI-A-1,
   - serial HDMI-A-2,
+  - sync mode,
+  - sync group status,
   - server URL,
   - network status,
   - CMS approval status obu outputow,
@@ -400,6 +445,13 @@ player_type = "video_premium"
 app_version = "rpi-video-premium-0.1.0"
 cache_limit_mb = 20480
 heartbeat_interval_seconds = 15
+
+[sync]
+mode = "clocked_playlist"
+group = "dual-hdmi"
+policy = "best_effort"
+tolerance_ms = 250
+group_blackout = true
 
 [[outputs]]
 name = "HDMI-A-1"
@@ -569,12 +621,15 @@ Player jest gotowy do pierwszego testu, gdy:
 5. W CMS pojawiaja sie dwa pending devices.
 6. Oba pending devices mozna zatwierdzic jako `Video Premium`.
 7. Kazdy output mozna przypisac do innego kanalu CMS.
-8. HDMI-A-1 odtwarza playlistę przypisana do pierwszego logicznego device.
-9. HDMI-A-2 odtwarza playlistę przypisana do drugiego logicznego device.
-10. Blackout/wake dziala osobno per output.
-11. Po odlaczeniu internetu player gra ostatnia poprawna kolejke z cache.
-12. Bledy playbacku widac w CMS w sekcji `Logi`.
-13. Usuniecie `/boot/firmware/SIGNALDECK_LOCK` i reboot wraca do setup mode.
+8. HDMI-A-1 odtwarza playliste przypisana do pierwszego logicznego device.
+9. HDMI-A-2 odtwarza playliste przypisana do drugiego logicznego device.
+10. Po wlaczeniu `clocked_playlist` oba outputy czekaja na cache i startuja wspolnie.
+11. Dwie zgodne czasowo playlisty utrzymuja sloty w synchronizacji.
+12. Niezgodne playlisty generuja `warn` w CMS `Logi`.
+13. Blackout/wake dziala osobno per output albo grupowo, zaleznie od `group_blackout`.
+14. Po odlaczeniu internetu player gra ostatnia poprawna kolejke z cache.
+15. Bledy playbacku widac w CMS w sekcji `Logi`.
+16. Usuniecie `/boot/firmware/SIGNALDECK_LOCK` i reboot wraca do setup mode.
 
 ## Prompt do nowego watku
 
@@ -594,7 +649,7 @@ Zadanie:
 Zaimplementuj pierwszy pakiet Raspberry Pi 5 Video Premium player. Ma powstac skrypt `scripts/rpi/install-video-premium.sh` dla swiezego Raspberry Pi OS Lite 64-bit oraz minimalny agent/WebUI, jezeli repo jeszcze ich nie ma.
 
 Wymagania:
-- RPi 5, dwa niezalezne wyjscia HDMI.
+- RPi 5, dwa wyjscia HDMI, domyslnie niezalezne, z opcja lokalnej synchronizacji pod menuboard/videowall.
 - Bez osobnego audio/USB audio w v1.
 - Obecny CMS ma jedno `channelId` na Device, wiec fizyczny RPi 5 ma rejestrowac dwa logiczne urzadzenia:
   - `HDMI-A-1` jako serial bazowy + `A`,
@@ -607,6 +662,13 @@ Wymagania:
 - Hotspot setup `SignalDeck-XXXX`, WebUI na `http://10.42.0.1:8080` i `http://player.local:8080`.
 - Reset setupu przez usuniecie `/boot/firmware/SIGNALDECK_LOCK`.
 - Lokalny cache mediow.
+- Tryb sync dla obu HDMI:
+  - `independent`,
+  - `paired_start`,
+  - `clocked_playlist`.
+- Synchronizacja ma byc lokalna w RPi agencie, mimo ze CMS widzi dwa logiczne devices.
+- W `clocked_playlist` agent ma czekac na cache obu outputow i startowac sloty wedlug wspolnego monotonicznego zegara.
+- Jesli playlisty nie maja zgodnych slotow/czasow, agent raportuje `warn` do `/api/player/logs`.
 - systemd services, watchdog, unattended security updates.
 - Playback przez mpv albo inny stabilny runtime, po jednym runtime/procesie na output.
 - `kind=video` i `kind=image` obslugiwane.
