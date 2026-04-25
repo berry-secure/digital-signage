@@ -523,7 +523,7 @@ button:disabled {
 .device-detail-grid {
   display: grid;
   gap: 0.65rem;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
 }
 
 .device-detail-grid div {
@@ -543,6 +543,33 @@ button:disabled {
 .device-detail-grid strong {
   color: #e6f0ff;
   font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.live-command-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem) auto;
+  gap: 0.75rem;
+  align-items: end;
+  padding: 0.85rem;
+  border-radius: 0.95rem;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(125, 180, 255, 0.12);
+}
+
+.live-command-panel > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.live-command-panel span,
+.live-command-panel small {
+  color: #90a6c2;
+  font-size: 0.8rem;
+}
+
+.live-command-panel strong {
   overflow-wrap: anywhere;
 }
 
@@ -674,7 +701,8 @@ button:disabled {
   .inline-grid.triple,
   .device-filter-bar,
   .device-center-grid,
-  .device-detail-grid {
+  .device-detail-grid,
+  .live-command-panel {
     grid-template-columns: 1fr;
   }
 }

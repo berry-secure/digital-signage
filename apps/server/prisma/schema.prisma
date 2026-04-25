@@ -51,25 +51,26 @@ enum AuditAction {
 }
 
 model User {
-  id           String       @id @default(uuid()) @db.Uuid
-  email        String       @unique
-  name         String
-  role         UserRole     @default(editor)
-  passwordHash String
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  clients      UserClient[]
-  sessions     Session[]
-  auditLogs    AuditLog[]
+  id             String          @id @default(uuid()) @db.Uuid
+  email          String          @unique
+  name           String
+  role           UserRole        @default(editor)
+  passwordHash   String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  clients        UserClient[]
+  sessions       Session[]
+  auditLogs      AuditLog[]
+  deviceCommands DeviceCommand[]
 }
 
 model Client {
-  id         String         @id @default(uuid()) @db.Uuid
+  id         String       @id @default(uuid()) @db.Uuid
   name       String
-  slug       String         @unique
-  brandColor String         @default("#ff6a3c")
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
+  slug       String       @unique
+  brandColor String       @default("#ff6a3c")
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
   users      UserClient[]
   channels   Channel[]
   media      Media[]
@@ -204,6 +205,7 @@ model Device {
   platform            String               @default("android")
   appVersion          String               @default("")
   deviceModel         String               @default("Android TV")
+  playerType          String               @default("video_standard")
   desiredDisplayState DeviceDisplayState   @default(active)
   volumePercent       Int                  @default(80)
   playerState         DevicePlayerState    @default(waiting)
@@ -216,11 +218,33 @@ model Device {
   updatedAt           DateTime             @updatedAt
   client              Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull)
   channel             Channel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  commands            DeviceCommand[]
 
   @@index([approvalStatus])
   @@index([clientId])
   @@index([channelId])
   @@index([lastSeenAt])
+}
+
+model DeviceCommand {
+  id                String    @id @default(uuid()) @db.Uuid
+  deviceId          String    @db.Uuid
+  type              String
+  status            String    @default("pending")
+  payload           Json?
+  message           String    @default("")
+  requestedByUserId String?   @db.Uuid
+  requestedAt       DateTime  @default(now())
+  sentAt            DateTime?
+  ackedAt           DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  device            Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  requestedBy       User?     @relation(fields: [requestedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([deviceId, status])
+  @@index([requestedByUserId])
+  @@index([updatedAt])
 }
 
 model Session {

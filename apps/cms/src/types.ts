@@ -2,6 +2,29 @@ export type UserRole = "owner" | "manager" | "editor";
 export type DeviceApprovalStatus = "pending" | "approved";
 export type DeviceDisplayState = "active" | "blackout";
 export type DevicePlayerState = "waiting" | "idle" | "playing";
+export type DevicePlayerType =
+  | "music_mini"
+  | "music_max"
+  | "video_standard"
+  | "video_premium"
+  | "streaming"
+  | "android_tv"
+  | "mobile_app";
+export type DeviceCommandType =
+  | "reboot_os"
+  | "restart_app"
+  | "force_sync"
+  | "force_playlist_update"
+  | "force_app_update"
+  | "clear_cache"
+  | "screenshot"
+  | "blackout"
+  | "wake"
+  | "set_volume"
+  | "network_diagnostics"
+  | "upload_logs"
+  | "rotate_secret";
+export type DeviceCommandStatus = "pending" | "sent" | "acked" | "failed";
 export type MediaKind = "video" | "image";
 
 export interface UserRecord {
@@ -102,6 +125,7 @@ export interface DeviceRecord {
   platform: string;
   appVersion: string;
   deviceModel: string;
+  playerType: DevicePlayerType;
   desiredDisplayState: DeviceDisplayState;
   volumePercent: number;
   playerState: DevicePlayerState;
@@ -115,6 +139,23 @@ export interface DeviceRecord {
   clientName: string;
   channelName: string;
   online: boolean;
+}
+
+export interface DeviceCommandRecord {
+  id: string;
+  deviceId: string;
+  type: DeviceCommandType;
+  status: DeviceCommandStatus;
+  payload: Record<string, unknown>;
+  message: string;
+  requestedByUserId: string;
+  requestedAt: string;
+  sentAt: string;
+  ackedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  deviceName: string;
+  deviceSerial: string;
 }
 
 export interface InstallationInfo {
@@ -132,4 +173,5 @@ export interface BootstrapPayload {
   playlists: PlaylistRecord[];
   schedules: ScheduleRecord[];
   devices: DeviceRecord[];
+  deviceCommands: DeviceCommandRecord[];
 }

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildDeviceQuickUpdate, filterDeviceCenterDevices, getDeviceConnection, getDeviceType, summarizeDeviceFleet } from "./deviceCenter";
+import {
+  buildDeviceQuickUpdate,
+  filterDeviceCenterDevices,
+  getDeviceConnection,
+  getDeviceType,
+  getDeviceTypeLabel,
+  summarizeDeviceFleet
+} from "./deviceCenter";
 import type { DeviceRecord } from "./types";
 
 describe("Device Center helpers", () => {
@@ -38,6 +45,7 @@ describe("Device Center helpers", () => {
       name: "Lobby",
       clientId: "client-1",
       channelId: "channel-1",
+      playerType: "video_standard",
       locationLabel: "Recepcja",
       notes: "Test notes",
       desiredDisplayState: "blackout",
@@ -48,6 +56,7 @@ describe("Device Center helpers", () => {
       name: "Lobby",
       clientId: "client-1",
       channelId: "channel-1",
+      playerType: "video_standard",
       locationLabel: "Recepcja",
       notes: "Test notes",
       desiredDisplayState: "active",
@@ -58,6 +67,7 @@ describe("Device Center helpers", () => {
       name: "Lobby",
       clientId: "client-1",
       channelId: "channel-1",
+      playerType: "video_standard",
       locationLabel: "Recepcja",
       notes: "Test notes",
       desiredDisplayState: "blackout",
@@ -65,31 +75,48 @@ describe("Device Center helpers", () => {
     });
   });
 
-  it("keeps the fleet global until a client, search, or type filter is selected", () => {
+  it("keeps the fleet global until a client, search, or product type filter is selected", () => {
     const devices = [
-      device({ id: "rpi", name: "AndroidNaRpi", clientId: "client-a", serial: "MKRPI001", platform: "android", deviceModel: "Android on Raspberry Pi" }),
-      device({ id: "tv", name: "Lobby TV", clientId: "client-a", serial: "MKTV001", platform: "android", deviceModel: "Android TV" }),
-      device({ id: "web", name: "Browser Preview", clientId: "client-b", serial: "MKWEB001", platform: "web", deviceModel: "Chrome" })
+      device({ id: "music-mini", name: "Audio Lite", clientId: "client-a", serial: "MKAUDIO001", playerType: "music_mini" }),
+      device({ id: "video-standard", name: "Lobby TV", clientId: "client-a", serial: "MKTV001", playerType: "video_standard" }),
+      device({ id: "video-premium", name: "Browser Preview", clientId: "client-b", serial: "MKWEB001", playerType: "video_premium" })
     ];
 
     assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", query: "", type: "" }).map((entry) => entry.id), [
-      "rpi",
-      "tv",
-      "web"
+      "music-mini",
+      "video-standard",
+      "video-premium"
     ]);
     assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", query: "", type: "" }).map((entry) => entry.id), [
-      "rpi",
-      "tv"
+      "music-mini",
+      "video-standard"
     ]);
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", query: "preview", type: "" }).map((entry) => entry.id), ["web"]);
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", query: "", type: "rpi" }).map((entry) => entry.id), ["rpi"]);
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", query: "preview", type: "" }).map((entry) => entry.id), [
+      "video-premium"
+    ]);
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", query: "", type: "music_mini" }).map((entry) => entry.id), [
+      "music-mini"
+    ]);
   });
 
-  it("classifies player type from platform and model hints", () => {
-    assert.equal(getDeviceType(device({ platform: "android", deviceModel: "Android on Raspberry Pi" })), "rpi");
-    assert.equal(getDeviceType(device({ platform: "android", deviceModel: "Android TV" })), "android");
-    assert.equal(getDeviceType(device({ platform: "web", deviceModel: "Chrome" })), "web");
-    assert.equal(getDeviceType(device({ platform: "linux", deviceModel: "Player Agent" })), "other");
+  it("classifies and labels the full player product type list from the assigned CMS field", () => {
+    const expected = [
+      ["music_mini", "Music Mini"],
+      ["music_max", "Music Max"],
+      ["video_standard", "Video Standard"],
+      ["video_premium", "Video Premium"],
+      ["streaming", "Streaming"],
+      ["android_tv", "AndroidTV"],
+      ["mobile_app", "MobileApp"]
+    ] as const;
+
+    for (const [playerType, label] of expected) {
+      const entry = device({ playerType });
+      assert.equal(getDeviceType(entry), playerType);
+      assert.equal(getDeviceTypeLabel(entry), label);
+    }
+
+    assert.equal(getDeviceType(device({ playerType: "" })), "video_standard");
   });
 });
 
@@ -111,6 +138,7 @@ function device(overrides: Partial<DeviceRecord> = {}): DeviceRecord {
     platform: "android",
     appVersion: "1.0.1",
     deviceModel: "Android TV",
+    playerType: "video_standard",
     desiredDisplayState: "active",
     volumePercent: 80,
     playerState: "idle",

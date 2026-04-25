@@ -53,6 +53,32 @@ let sessions = new Map<string, string>();
 let database: any = null;
 let persistQueue = Promise.resolve();
 
+const devicePlayerTypes = new Set([
+  "music_mini",
+  "music_max",
+  "video_standard",
+  "video_premium",
+  "streaming",
+  "android_tv",
+  "mobile_app"
+]);
+const deviceCommandTypes = new Set([
+  "reboot_os",
+  "restart_app",
+  "force_sync",
+  "force_playlist_update",
+  "force_app_update",
+  "clear_cache",
+  "screenshot",
+  "blackout",
+  "wake",
+  "set_volume",
+  "network_diagnostics",
+  "upload_logs",
+  "rotate_secret"
+]);
+const deviceCommandStatuses = new Set(["pending", "sent", "acked", "failed"]);
+
 export function resolveServerConfig(config: ServerConfig = {}) {
   const env = config.env || process.env;
   const nextRootDir = resolve(config.rootDir || defaultRootDir);
@@ -321,6 +347,7 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
   const channelIds = database.channels.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const playlistIds = database.playlists.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const mediaToDelete = database.media.filter((entry) => entry.clientId === clientId);
+  const resetDeviceIds = database.devices.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
 
   database.clients = database.clients.filter((entry) => entry.id !== clientId);
   database.channels = database.channels.filter((entry) => entry.clientId !== clientId);
@@ -341,6 +368,7 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
       : entry
   );
   database.media = database.media.filter((entry) => entry.clientId !== clientId);
+  database.deviceCommands = database.deviceCommands.filter((entry) => !resetDeviceIds.includes(entry.deviceId));
 
   await Promise.all(mediaToDelete.map((entry) => removeUploadFile(entry.fileName)));
   await persistDatabase();
@@ -620,6 +648,7 @@ app.post("/api/devices/approve", requireAuth, async (req, res) => {
   device.name = String(req.body?.name || device.name || `Ekran ${device.serial}`).trim() || `Ekran ${device.serial}`;
   device.clientId = clientId;
   device.channelId = channelId;
+  device.playerType = normalizeDevicePlayerType(req.body?.playerType || device.playerType);
   device.locationLabel = String(req.body?.locationLabel || device.locationLabel || device.name).trim();
   device.notes = String(req.body?.notes || device.notes || "").trim();
   device.desiredDisplayState = req.body?.desiredDisplayState === "blackout" ? "blackout" : "active";
@@ -639,6 +668,7 @@ app.put("/api/devices/:id", requireAuth, async (req, res) => {
   device.name = String(req.body?.name || device.name).trim() || device.name;
   device.clientId = String(req.body?.clientId || device.clientId).trim();
   device.channelId = String(req.body?.channelId || device.channelId).trim();
+  device.playerType = normalizeDevicePlayerType(req.body?.playerType || device.playerType);
   device.locationLabel = String(req.body?.locationLabel || device.locationLabel).trim();
   device.notes = String(req.body?.notes || device.notes).trim();
   device.desiredDisplayState = req.body?.desiredDisplayState === "blackout" ? "blackout" : "active";
@@ -649,6 +679,49 @@ app.put("/api/devices/:id", requireAuth, async (req, res) => {
   touch(device);
   await persistDatabase();
   res.json({ device: presentDevice(device) });
+});
+
+app.post("/api/devices/:id/commands", requireAuth, async (req, res) => {
+  const device = findById(database.devices, req.params.id);
+  if (!device) {
+    res.status(404).json({ message: "Nie znaleziono urządzenia." });
+    return;
+  }
+
+  if (device.approvalStatus !== "approved") {
+    res.status(400).json({ message: "Komendy live można wysyłać tylko do zatwierdzonych urządzeń." });
+    return;
+  }
+
+  const type = normalizeDeviceCommandType(req.body?.type);
+  if (!type) {
+    res.status(400).json({ message: "Nieznany typ komendy live." });
+    return;
+  }
+
+  const command = {
+    id: randomUUID(),
+    deviceId: device.id,
+    type,
+    status: "pending",
+    payload: buildDeviceCommandPayload(type, req.body?.payload),
+    message: "",
+    requestedByUserId: req.user?.id || "",
+    requestedAt: nowIso(),
+    sentAt: "",
+    ackedAt: "",
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  applyDeviceCommandSideEffects(device, command);
+  database.deviceCommands.unshift(command);
+  touch(device);
+  await persistDatabase();
+  res.status(201).json({
+    command: presentDeviceCommand(command),
+    device: presentDevice(device)
+  });
 });
 
 app.post("/api/devices/:id/reset", requireAuth, async (req, res) => {
@@ -663,6 +736,7 @@ app.post("/api/devices/:id/reset", requireAuth, async (req, res) => {
   device.channelId = "";
   device.locationLabel = "";
   device.desiredDisplayState = "active";
+  database.deviceCommands = database.deviceCommands.filter((entry) => entry.deviceId !== device.id);
   touch(device);
   await persistDatabase();
   res.json({ device: presentDevice(device) });
@@ -670,6 +744,7 @@ app.post("/api/devices/:id/reset", requireAuth, async (req, res) => {
 
 app.delete("/api/devices/:id", requireAuth, async (req, res) => {
   database.devices = database.devices.filter((entry) => entry.id !== req.params.id);
+  database.deviceCommands = database.deviceCommands.filter((entry) => entry.deviceId !== req.params.id);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -697,6 +772,7 @@ app.post("/api/player/session", async (req, res) => {
       platform: String(req.body?.platform || "android").trim() || "android",
       appVersion: String(req.body?.appVersion || "").trim(),
       deviceModel: String(req.body?.deviceModel || "Android TV").trim() || "Android TV",
+      playerType: "video_standard",
       desiredDisplayState: "active",
       volumePercent: 80,
       playerState: "waiting",
@@ -720,6 +796,7 @@ app.post("/api/player/session", async (req, res) => {
   device.platform = String(req.body?.platform || device.platform || "android").trim() || "android";
   device.appVersion = String(req.body?.appVersion || device.appVersion || "").trim();
   device.deviceModel = String(req.body?.deviceModel || device.deviceModel || "Android TV").trim() || "Android TV";
+  device.playerType = normalizeDevicePlayerType(device.playerType);
   device.playerState = String(req.body?.playerState || device.playerState || "waiting").trim() || "waiting";
   device.playerMessage = String(req.body?.playerMessage || device.playerMessage || "").trim();
   device.activeItemTitle = String(req.body?.activeItemTitle || "").trim();
@@ -729,6 +806,7 @@ app.post("/api/player/session", async (req, res) => {
   }
   touch(device);
 
+  const commands = device.approvalStatus === "approved" ? takePendingDeviceCommands(device) : [];
   const playback = device.approvalStatus === "approved" ? buildPlaybackPayload(device, req) : emptyPlayback();
   if (device.approvalStatus === "approved") {
     device.lastSyncAt = nowIso();
@@ -739,8 +817,35 @@ app.post("/api/player/session", async (req, res) => {
     device: presentDevice(device),
     approvalStatus: device.approvalStatus,
     playback,
+    commands: commands.map(presentPlayerCommand),
     serverTime: nowIso()
   });
+});
+
+app.post("/api/player/commands/:id/ack", async (req, res) => {
+  const serial = normalizeSerial(String(req.body?.serial || ""));
+  const secret = String(req.body?.secret || "").trim();
+  const command = findById(database.deviceCommands, req.params.id);
+
+  if (!command) {
+    res.status(404).json({ message: "Nie znaleziono komendy live." });
+    return;
+  }
+
+  const device = database.devices.find((entry) => entry.id === command.deviceId && entry.serial === serial && entry.secret === secret);
+  if (!device) {
+    res.status(404).json({ message: "Nie znaleziono urządzenia dla tej komendy." });
+    return;
+  }
+
+  const status = req.body?.status === "failed" ? "failed" : "acked";
+  command.status = status;
+  command.message = String(req.body?.message || (status === "acked" ? "ACK" : "Command failed")).trim();
+  command.ackedAt = nowIso();
+  touch(command);
+  await persistDatabase();
+
+  res.json({ command: presentDeviceCommand(command) });
 });
 
 app.post("/api/player/reset", async (req, res) => {
@@ -761,6 +866,7 @@ app.post("/api/player/reset", async (req, res) => {
   device.playerState = "waiting";
   device.playerMessage = "Urządzenie zostało rozłączone i czeka na ponowne zatwierdzenie.";
   device.activeItemTitle = "";
+  database.deviceCommands = database.deviceCommands.filter((entry) => entry.deviceId !== device.id);
   touch(device);
   await persistDatabase();
   res.json({
@@ -848,7 +954,8 @@ function buildBootstrapPayload(req) {
     media: [...database.media].sort(sortByUpdatedDesc).map((entry) => enrichMedia(entry, baseUrl)),
     playlists: buildPlaylistViews(),
     schedules: [...database.schedules].sort(sortByPriorityDesc),
-    devices: [...database.devices].sort(sortDevices).map((entry) => presentDevice(entry))
+    devices: [...database.devices].sort(sortDevices).map((entry) => presentDevice(entry)),
+    deviceCommands: [...database.deviceCommands].sort(sortByUpdatedDesc).slice(0, 250).map((entry) => presentDeviceCommand(entry))
   };
 }
 
@@ -962,9 +1069,33 @@ function presentDevice(device) {
 
   return {
     ...device,
+    playerType: normalizeDevicePlayerType(device.playerType),
     clientName: client?.name || "",
     channelName: channel?.name || "",
     online: isOnline
+  };
+}
+
+function presentDeviceCommand(command) {
+  const device = findById(database.devices, command.deviceId);
+  return {
+    ...command,
+    status: normalizeDeviceCommandStatus(command.status),
+    payload: isPlainObject(command.payload) ? command.payload : {},
+    requestedAt: command.requestedAt || command.createdAt || "",
+    sentAt: command.sentAt || "",
+    ackedAt: command.ackedAt || "",
+    deviceName: device?.name || "",
+    deviceSerial: device?.serial || ""
+  };
+}
+
+function presentPlayerCommand(command) {
+  return {
+    id: command.id,
+    type: command.type,
+    payload: isPlainObject(command.payload) ? command.payload : {},
+    requestedAt: command.requestedAt || command.createdAt || ""
   };
 }
 
@@ -1102,6 +1233,59 @@ function normalizeSerial(value) {
     .replace(/[^A-Z0-9]/g, "");
 }
 
+function normalizeDevicePlayerType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return devicePlayerTypes.has(normalized) ? normalized : "video_standard";
+}
+
+function normalizeDeviceCommandType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return deviceCommandTypes.has(normalized) ? normalized : "";
+}
+
+function normalizeDeviceCommandStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return deviceCommandStatuses.has(normalized) ? normalized : "pending";
+}
+
+function buildDeviceCommandPayload(type, payload) {
+  const source = isPlainObject(payload) ? payload : {};
+  if (type === "set_volume") {
+    return {
+      volumePercent: clampNumber(Number(source.volumePercent || 80), 0, 100)
+    };
+  }
+  return source;
+}
+
+function applyDeviceCommandSideEffects(device, command) {
+  if (command.type === "blackout") {
+    device.desiredDisplayState = "blackout";
+  }
+  if (command.type === "wake") {
+    device.desiredDisplayState = "active";
+  }
+  if (command.type === "set_volume") {
+    device.volumePercent = clampNumber(Number(command.payload?.volumePercent || device.volumePercent || 80), 0, 100);
+  }
+}
+
+function takePendingDeviceCommands(device) {
+  const sentAt = nowIso();
+  return database.deviceCommands
+    .filter((entry) => entry.deviceId === device.id && normalizeDeviceCommandStatus(entry.status) === "pending")
+    .map((entry) => {
+      entry.status = "sent";
+      entry.sentAt = sentAt;
+      touch(entry);
+      return entry;
+    });
+}
+
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function sanitizeUser(user) {
   return {
     id: user.id,
@@ -1177,7 +1361,8 @@ async function loadDatabase() {
       playlists: Array.isArray(parsed.playlists) ? parsed.playlists : [],
       playlistItems: Array.isArray(parsed.playlistItems) ? parsed.playlistItems : [],
       schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
-      devices: Array.isArray(parsed.devices) ? parsed.devices : []
+      devices: Array.isArray(parsed.devices) ? parsed.devices : [],
+      deviceCommands: Array.isArray(parsed.deviceCommands) ? parsed.deviceCommands : []
     };
   } catch {
     const initial = {
@@ -1188,7 +1373,8 @@ async function loadDatabase() {
       playlists: [],
       playlistItems: [],
       schedules: [],
-      devices: []
+      devices: [],
+      deviceCommands: []
     };
     await fs.writeFile(databasePath, JSON.stringify(initial, null, 2));
     return initial;

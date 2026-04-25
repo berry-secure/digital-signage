@@ -1,4 +1,4 @@
-import type { BootstrapPayload } from "./types";
+import type { BootstrapPayload, DeviceCommandType } from "./types";
 
 const localApiBase =
   typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : "http://localhost:3000";
@@ -300,6 +300,7 @@ export async function approveDevice(
     name: string;
     clientId: string;
     channelId: string;
+    playerType: string;
     locationLabel: string;
     notes: string;
     desiredDisplayState: string;
@@ -320,6 +321,7 @@ export async function updateDevice(
     name: string;
     clientId: string;
     channelId: string;
+    playerType: string;
     locationLabel: string;
     notes: string;
     desiredDisplayState: string;
@@ -329,6 +331,24 @@ export async function updateDevice(
 ) {
   return requestJson<{ device: BootstrapPayload["devices"][number] }>(`/api/devices/${deviceId}`, {
     method: "PUT",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function issueDeviceCommand(
+  token: string,
+  deviceId: string,
+  payload: {
+    type: DeviceCommandType;
+    payload?: Record<string, unknown>;
+  }
+) {
+  return requestJson<{
+    command: BootstrapPayload["deviceCommands"][number];
+    device: BootstrapPayload["devices"][number];
+  }>(`/api/devices/${deviceId}/commands`, {
+    method: "POST",
     token,
     body: JSON.stringify(payload)
   });

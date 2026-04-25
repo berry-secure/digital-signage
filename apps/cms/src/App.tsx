@@ -20,6 +20,7 @@ import {
   fetchBootstrap,
   getApiBaseUrl,
   getStoredToken,
+  issueDeviceCommand,
   login,
   logout,
   resetDevice,
@@ -33,17 +34,19 @@ import {
   uploadMedia
 } from "./api";
 import {
-  buildDeviceQuickUpdate,
   filterDeviceCenterDevices,
   getDeviceConnection,
+  getDeviceType,
+  getDeviceTypeLabel,
   summarizeDeviceFleet,
-  type DeviceCenterFilters,
-  type DeviceQuickAction
+  type DeviceCenterFilters
 } from "./deviceCenter";
 import type {
   BootstrapPayload,
   ChannelRecord,
   ClientRecord,
+  DeviceCommandRecord,
+  DeviceCommandType,
   DeviceRecord,
   InstallationInfo,
   MediaRecord,
@@ -129,6 +132,7 @@ type DeviceFormState = {
   name: string;
   clientId: string;
   channelId: string;
+  playerType: DeviceCenterFilters["type"];
   locationLabel: string;
   notes: string;
   desiredDisplayState: "active" | "blackout";
@@ -147,12 +151,33 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "install", label: "Instalacja", hint: "APK i adres serwera" }
 ];
 
-const deviceTypeOptions: Array<{ value: DeviceCenterFilters["type"]; label: string }> = [
+const playerTypeOptions: Array<{ value: DeviceCenterFilters["type"]; label: string }> = [
+  { value: "music_mini", label: "Music Mini" },
+  { value: "music_max", label: "Music Max" },
+  { value: "video_standard", label: "Video Standard" },
+  { value: "video_premium", label: "Video Premium" },
+  { value: "streaming", label: "Streaming" },
+  { value: "android_tv", label: "AndroidTV" },
+  { value: "mobile_app", label: "MobileApp" }
+];
+
+const deviceTypeOptions: Array<{ value: DeviceCenterFilters["type"] | ""; label: string }> = [
   { value: "", label: "Wszystkie typy" },
-  { value: "android", label: "Android / TV" },
-  { value: "rpi", label: "Android na RPi" },
-  { value: "web", label: "Web / przeglądarka" },
-  { value: "other", label: "Inne" }
+  ...playerTypeOptions
+];
+
+const liveCommandOptions: Array<{ value: DeviceCommandType; label: string }> = [
+  { value: "force_sync", label: "Force sync" },
+  { value: "force_playlist_update", label: "Force playlist update" },
+  { value: "restart_app", label: "Restart app" },
+  { value: "reboot_os", label: "Reboot OS" },
+  { value: "force_app_update", label: "Force firmware/app update" },
+  { value: "clear_cache", label: "Clear cache" },
+  { value: "screenshot", label: "Screenshot" },
+  { value: "network_diagnostics", label: "Network diagnostics" },
+  { value: "upload_logs", label: "Upload logs" },
+  { value: "rotate_secret", label: "Rotate secret" },
+  { value: "set_volume", label: "Apply volume" }
 ];
 
 const emptyBootstrap: BootstrapPayload = {
@@ -164,7 +189,8 @@ const emptyBootstrap: BootstrapPayload = {
   media: [],
   playlists: [],
   schedules: [],
-  devices: []
+  devices: [],
+  deviceCommands: []
 };
 
 const emptyUserForm: UserFormState = {
@@ -240,6 +266,7 @@ const emptyDeviceForm: DeviceFormState = {
   name: "",
   clientId: "",
   channelId: "",
+  playerType: "video_standard",
   locationLabel: "",
   notes: "",
   desiredDisplayState: "active",
@@ -274,6 +301,7 @@ function App() {
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(emptyScheduleForm);
   const [deviceForm, setDeviceForm] = useState<DeviceFormState>(emptyDeviceForm);
   const [deviceFilters, setDeviceFilters] = useState<DeviceCenterFilters>({ clientId: "", query: "", type: "" });
+  const [deviceCommandDrafts, setDeviceCommandDrafts] = useState<Record<string, DeviceCommandType>>({});
 
   const clients = dashboard.clients;
   const channels = dashboard.channels;
@@ -281,12 +309,14 @@ function App() {
   const playlists = dashboard.playlists;
   const schedules = dashboard.schedules;
   const devices = dashboard.devices;
+  const deviceCommands = dashboard.deviceCommands || [];
   const filteredDevices = useMemo(() => filterDeviceCenterDevices(devices, deviceFilters), [devices, deviceFilters]);
   const pendingDevices = filteredDevices.filter((device) => device.approvalStatus === "pending");
   const approvedDevices = filteredDevices.filter((device) => device.approvalStatus === "approved");
   const deviceFleet = useMemo(() => summarizeDeviceFleet(filteredDevices), [filteredDevices]);
   const deviceFormIsPending = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "pending");
   const deviceFormIsApproved = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "approved");
+  const latestCommandByDevice = useMemo(() => buildLatestCommandLookup(deviceCommands), [deviceCommands]);
 
   const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
   const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
@@ -481,6 +511,7 @@ function App() {
       name: device.name === "Android TV" ? `Ekran ${device.serial}` : device.name,
       clientId: device.clientId,
       channelId: device.channelId,
+      playerType: getDeviceType(device),
       locationLabel: device.locationLabel,
       notes: device.notes,
       desiredDisplayState: device.desiredDisplayState,
@@ -496,6 +527,7 @@ function App() {
       name: device.name,
       clientId: device.clientId,
       channelId: device.channelId,
+      playerType: getDeviceType(device),
       locationLabel: device.locationLabel,
       notes: device.notes,
       desiredDisplayState: device.desiredDisplayState,
@@ -504,13 +536,25 @@ function App() {
     setActiveSection("devices");
   }
 
-  function quickUpdateDevice(device: DeviceRecord, action: DeviceQuickAction) {
+  function quickUpdateDevice(device: DeviceRecord, action: "blackout" | "wake") {
     if (!token) {
       return;
     }
 
     const successText = action === "blackout" ? `Blackout wysłany do ${device.name}.` : `Wake wysłany do ${device.name}.`;
-    void runMutation(async () => updateDevice(token, device.id, buildDeviceQuickUpdate(device, action)), successText);
+    void runMutation(async () => issueDeviceCommand(token, device.id, { type: action }), successText);
+  }
+
+  function sendLiveCommand(device: DeviceRecord, type: DeviceCommandType) {
+    if (!token) {
+      return;
+    }
+
+    const payload = type === "set_volume" ? { volumePercent: device.volumePercent } : undefined;
+    void runMutation(
+      async () => issueDeviceCommand(token, device.id, { type, payload }),
+      `Komenda ${commandLabel(type)} wysłana do ${device.name}.`
+    );
   }
 
   function toggleScheduleDay(day: number) {
@@ -1948,6 +1992,7 @@ function App() {
                     name: deviceForm.name,
                     clientId: deviceForm.clientId,
                     channelId: deviceForm.channelId,
+                    playerType: deviceForm.playerType || "video_standard",
                     locationLabel: deviceForm.locationLabel,
                     notes: deviceForm.notes,
                     desiredDisplayState: deviceForm.desiredDisplayState,
@@ -2050,6 +2095,25 @@ function App() {
                     onChange={(event) => setDeviceForm((current) => ({ ...current, locationLabel: event.target.value }))}
                   />
                 </Field>
+                <Field label="Typ playera" htmlFor="device-player-type">
+                  <select
+                    id="device-player-type"
+                    name="device-player-type"
+                    value={deviceForm.playerType}
+                    onChange={(event) =>
+                      setDeviceForm((current) => ({
+                        ...current,
+                        playerType: event.target.value as DeviceCenterFilters["type"]
+                      }))
+                    }
+                  >
+                    {playerTypeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
                 <div className="inline-grid">
                   <Field label="Tryb ekranu" htmlFor="device-display-state">
                     <select
@@ -2101,7 +2165,11 @@ function App() {
               </header>
               {approvedDevices.length ? (
                 <div className="device-center-grid">
-                  {approvedDevices.map((device) => (
+                  {approvedDevices.map((device) => {
+                    const latestCommand = latestCommandByDevice.get(device.id);
+                    const selectedCommand = deviceCommandDrafts[device.id] || "force_sync";
+
+                    return (
                     <div key={device.id} className={`device-card command-card ${device.desiredDisplayState === "blackout" ? "is-blackout" : ""}`}>
                       <div className="device-card-main">
                         <div>
@@ -2137,9 +2205,47 @@ function App() {
                           <strong>{device.platform || "brak"} · APK {device.appVersion || "brak"}</strong>
                         </div>
                         <div>
+                          <span>Typ</span>
+                          <strong>{getDeviceTypeLabel(device)}</strong>
+                        </div>
+                        <div>
                           <span>Volume</span>
                           <strong>{device.volumePercent}%</strong>
                         </div>
+                      </div>
+                      <div className="live-command-panel">
+                        <div>
+                          <span>Live command</span>
+                          <strong>
+                            {latestCommand
+                              ? `${commandLabel(latestCommand.type)} · ${commandStatusLabel(latestCommand.status)}`
+                              : "Brak komend"}
+                          </strong>
+                          {latestCommand?.message ? <small>{latestCommand.message}</small> : null}
+                        </div>
+                        <select
+                          value={selectedCommand}
+                          onChange={(event) =>
+                            setDeviceCommandDrafts((current) => ({
+                              ...current,
+                              [device.id]: event.target.value as DeviceCommandType
+                            }))
+                          }
+                        >
+                          {liveCommandOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => sendLiveCommand(device, selectedCommand)}
+                          disabled={submitting}
+                        >
+                          Wyślij
+                        </button>
                       </div>
                       <div className="card-actions">
                         {device.desiredDisplayState === "blackout" ? (
@@ -2180,7 +2286,8 @@ function App() {
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <EmptyState text="Jeszcze żadne urządzenie nie zostało zatwierdzone." />
@@ -2259,6 +2366,37 @@ function connectionLabel(value: ReturnType<typeof getDeviceConnection>) {
     return "świeży";
   }
   return value;
+}
+
+function commandLabel(type: DeviceCommandType) {
+  return liveCommandOptions.find((option) => option.value === type)?.label || type;
+}
+
+function commandStatusLabel(status: DeviceCommandRecord["status"]) {
+  if (status === "pending") {
+    return "czeka";
+  }
+  if (status === "sent") {
+    return "wysłana";
+  }
+  if (status === "acked") {
+    return "ACK";
+  }
+  return "błąd";
+}
+
+function buildLatestCommandLookup(commands: DeviceCommandRecord[]) {
+  const lookup = new Map<string, DeviceCommandRecord>();
+  for (const command of [...commands].sort(sortCommandsByUpdatedDesc)) {
+    if (!lookup.has(command.deviceId)) {
+      lookup.set(command.deviceId, command);
+    }
+  }
+  return lookup;
+}
+
+function sortCommandsByUpdatedDesc(left: DeviceCommandRecord, right: DeviceCommandRecord) {
+  return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
 }
 
 function Field(props: { label: string; htmlFor: string; children: ReactNode }) {

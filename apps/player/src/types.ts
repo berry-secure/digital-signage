@@ -1,6 +1,20 @@
 export type DeviceApprovalStatus = "pending" | "approved";
 export type PlayerState = "waiting" | "idle" | "playing";
 export type MediaKind = "video" | "image";
+export type DeviceCommandType =
+  | "reboot_os"
+  | "restart_app"
+  | "force_sync"
+  | "force_playlist_update"
+  | "force_app_update"
+  | "clear_cache"
+  | "screenshot"
+  | "blackout"
+  | "wake"
+  | "set_volume"
+  | "network_diagnostics"
+  | "upload_logs"
+  | "rotate_secret";
 
 export interface DeviceIdentity {
   serial: string;
@@ -39,6 +53,7 @@ export interface DeviceRecord {
   platform: string;
   appVersion: string;
   deviceModel: string;
+  playerType: string;
   desiredDisplayState: "active" | "blackout";
   volumePercent: number;
   playerState: PlayerState;
@@ -52,9 +67,17 @@ export interface DeviceRecord {
   online: boolean;
 }
 
+export interface DeviceCommand {
+  id: string;
+  type: DeviceCommandType;
+  payload: Record<string, unknown>;
+  requestedAt: string;
+}
+
 export interface SessionResponse {
   device: DeviceRecord;
   approvalStatus: DeviceApprovalStatus;
   playback: PlaybackPayload;
+  commands: DeviceCommand[];
   serverTime: string;
 }

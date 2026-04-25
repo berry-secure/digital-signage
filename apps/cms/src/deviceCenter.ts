@@ -1,8 +1,8 @@
-import type { DeviceDisplayState, DeviceRecord } from "./types";
+import type { DeviceDisplayState, DevicePlayerType, DeviceRecord } from "./types";
 
 export type DeviceConnection = "online" | "stale" | "offline";
 export type DeviceQuickAction = "blackout" | "wake";
-export type DeviceType = "android" | "rpi" | "web" | "other";
+export type DeviceType = DevicePlayerType;
 
 export type DeviceCenterFilters = {
   clientId: string;
@@ -21,6 +21,16 @@ export type DeviceFleetSummary = {
 };
 
 const offlineWindowMs = 5 * 60 * 1000;
+const fallbackDeviceType: DeviceType = "video_standard";
+const deviceTypeLabels: Record<DeviceType, string> = {
+  music_mini: "Music Mini",
+  music_max: "Music Max",
+  video_standard: "Video Standard",
+  video_premium: "Video Premium",
+  streaming: "Streaming",
+  android_tv: "AndroidTV",
+  mobile_app: "MobileApp"
+};
 
 export function getDeviceConnection(device: DeviceRecord, now = new Date()): DeviceConnection {
   if (device.online) {
@@ -89,6 +99,7 @@ export function filterDeviceCenterDevices(devices: DeviceRecord[], filters: Devi
       device.locationLabel,
       device.platform,
       device.deviceModel,
+      getDeviceTypeLabel(device),
       device.appVersion,
       device.playerMessage,
       device.activeItemTitle
@@ -99,21 +110,11 @@ export function filterDeviceCenterDevices(devices: DeviceRecord[], filters: Devi
 }
 
 export function getDeviceType(device: DeviceRecord): DeviceType {
-  const typeHint = `${device.platform} ${device.deviceModel}`.toLowerCase();
+  return isDeviceType(device.playerType) ? device.playerType : fallbackDeviceType;
+}
 
-  if (typeHint.includes("raspberry") || typeHint.includes("rpi")) {
-    return "rpi";
-  }
-
-  if (typeHint.includes("web") || typeHint.includes("chrome") || typeHint.includes("browser")) {
-    return "web";
-  }
-
-  if (typeHint.includes("android")) {
-    return "android";
-  }
-
-  return "other";
+export function getDeviceTypeLabel(device: DeviceRecord) {
+  return deviceTypeLabels[getDeviceType(device)];
 }
 
 export function buildDeviceQuickUpdate(device: DeviceRecord, action: DeviceQuickAction) {
@@ -123,9 +124,14 @@ export function buildDeviceQuickUpdate(device: DeviceRecord, action: DeviceQuick
     name: device.name,
     clientId: device.clientId,
     channelId: device.channelId,
+    playerType: getDeviceType(device),
     locationLabel: device.locationLabel,
     notes: device.notes,
     desiredDisplayState,
     volumePercent: device.volumePercent
   };
+}
+
+function isDeviceType(value: unknown): value is DeviceType {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(deviceTypeLabels, value);
 }
