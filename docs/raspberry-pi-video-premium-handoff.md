@@ -631,6 +631,27 @@ Player jest gotowy do pierwszego testu, gdy:
 15. Bledy playbacku widac w CMS w sekcji `Logi`.
 16. Usuniecie `/boot/firmware/SIGNALDECK_LOCK` i reboot wraca do setup mode.
 
+## Lokalna weryfikacja bez fizycznego RPi
+
+Pierwszy pakiet w repo dodaje testowalne elementy runtime w `apps/rpi-player` oraz instalator w `scripts/rpi/install-video-premium.sh`.
+
+Checki lokalne:
+
+```bash
+npm run test:server
+bash -n scripts/rpi/install-video-premium.sh
+python3 -m py_compile $(find apps/rpi-player/src -name '*.py' -print)
+PYTHONPATH=apps/rpi-player/src python3 -m unittest discover -s apps/rpi-player/tests -v
+```
+
+Elementy, ktore nadal wymagaja testu na fizycznym Raspberry Pi 5:
+
+- rzeczywiste nazwy DRM connectorow w `/sys/class/drm`,
+- zachowanie `mpv --vo=drm --drm-connector=HDMI-A-1/2`,
+- aktywacja hotspotu NetworkManager na Raspberry Pi OS Lite,
+- pomiar roznicy startu slotow na dwoch ekranach HDMI,
+- idempotencja instalatora po drugim uruchomieniu na swiezym obrazie.
+
 ## Prompt do nowego watku
 
 Wklej ponizszy tekst do nowego watku:
