@@ -25,12 +25,16 @@ export interface DeviceIdentity {
 export interface PlaybackEntry {
   id: string;
   playlistId: string;
+  scheduleId?: string;
+  mediaId?: string;
   title: string;
   kind: MediaKind;
   url: string;
   durationSeconds: number;
   volumePercent: number;
   hasAudio: boolean;
+  checksum?: string;
+  contentVersion?: number;
   sourceType?: "playlist" | "event";
   eventId?: string;
 }

@@ -20,6 +20,12 @@ export type DeviceFleetSummary = {
   blackout: number;
 };
 
+export type OfflineDeviceAlert = {
+  device: DeviceRecord;
+  minutesOffline: number;
+  message: string;
+};
+
 const offlineWindowMs = 5 * 60 * 1000;
 const fallbackDeviceType: DeviceType = "video_standard";
 const deviceTypeLabels: Record<DeviceType, string> = {
@@ -73,6 +79,24 @@ export function summarizeDeviceFleet(devices: DeviceRecord[], now = new Date()):
       blackout: 0
     }
   );
+}
+
+export function getOfflineDeviceAlerts(devices: DeviceRecord[], now = new Date()): OfflineDeviceAlert[] {
+  return devices
+    .filter((device) => device.approvalStatus === "approved" && getDeviceConnection(device, now) === "offline")
+    .map((device) => {
+      const lastSeenAt = Date.parse(device.lastSeenAt || "");
+      const minutesOffline = Number.isFinite(lastSeenAt)
+        ? Math.max(Math.floor((now.getTime() - lastSeenAt) / 60_000), 0)
+        : 0;
+
+      return {
+        device,
+        minutesOffline,
+        message: `${device.name || device.serial} offline od ${minutesOffline || "nieznanej liczby"} min.`
+      };
+    })
+    .sort((left, right) => right.minutesOffline - left.minutesOffline);
 }
 
 export function filterDeviceCenterDevices(devices: DeviceRecord[], filters: DeviceCenterFilters) {

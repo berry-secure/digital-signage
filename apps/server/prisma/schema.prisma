@@ -224,6 +224,7 @@ model Device {
   channel             Channel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
   commands            DeviceCommand[]
   logs                DeviceLog[]
+  proofOfPlay         ProofOfPlay[]
 
   @@index([approvalStatus])
   @@index([clientId])
@@ -295,6 +296,37 @@ model DeviceLog {
   @@index([severity])
   @@index([component])
   @@index([createdAt])
+}
+
+model ProofOfPlay {
+  id              String    @id @default(uuid()) @db.Uuid
+  deviceId        String    @db.Uuid
+  status          String
+  sourceType      String    @default("playlist")
+  playlistId      String    @default("")
+  scheduleId      String    @default("")
+  mediaId         String    @default("")
+  playbackItemId  String    @default("")
+  eventId         String    @default("")
+  mediaTitle      String    @default("")
+  mediaKind       MediaKind @default(video)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  occurredAt      DateTime  @default(now())
+  durationSeconds Int       @default(0)
+  checksum        String    @default("")
+  contentVersion  Int       @default(1)
+  errorMessage    String    @default("")
+  appVersion      String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, occurredAt])
+  @@index([status])
+  @@index([mediaId])
+  @@index([playlistId])
+  @@index([occurredAt])
 }
 
 model Session {

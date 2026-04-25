@@ -88,7 +88,8 @@ export function summarizeDatabase(database: any): MigrationSummary {
       devices: count(database.devices),
       deviceCommands: count(database.deviceCommands),
       playbackEvents: count(database.playbackEvents),
-      deviceLogs: count(database.deviceLogs)
+      deviceLogs: count(database.deviceLogs),
+      proofOfPlay: count(database.proofOfPlay)
     },
     importable: {
       users: batches.users.length,
@@ -101,7 +102,8 @@ export function summarizeDatabase(database: any): MigrationSummary {
       devices: batches.devices.length,
       deviceCommands: batches.deviceCommands.length,
       playbackEvents: batches.playbackEvents.length,
-      deviceLogs: batches.deviceLogs.length
+      deviceLogs: batches.deviceLogs.length,
+      proofOfPlay: batches.proofOfPlay.length
     }
   };
 }

@@ -20,6 +20,7 @@
     "prisma:validate": "npm run prisma:validate --workspace @ds/server",
     "prisma:generate": "npm run prisma:generate --workspace @ds/server",
     "prisma:migrate:dev": "npm run prisma:migrate:dev --workspace @ds/server",
+    "prisma:migrate:deploy": "npm run prisma:migrate:deploy --workspace @ds/server",
     "prisma:studio": "npm run prisma:studio --workspace @ds/server",
     "migrate:json:postgres": "npm run migrate:json:postgres --workspace @ds/server",
     "start:server": "npm run start --workspace @ds/server",

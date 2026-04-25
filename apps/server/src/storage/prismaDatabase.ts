@@ -13,6 +13,7 @@ type DatabaseShape = {
   deviceCommands: any[];
   playbackEvents: any[];
   deviceLogs: any[];
+  proofOfPlay: any[];
 };
 
 type AdminOptions = {
@@ -39,7 +40,8 @@ export function createEmptyDatabase(): DatabaseShape {
     devices: [],
     deviceCommands: [],
     playbackEvents: [],
-    deviceLogs: []
+    deviceLogs: [],
+    proofOfPlay: []
   };
 }
 
@@ -75,7 +77,8 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
     devices,
     deviceCommands,
     playbackEvents,
-    deviceLogs
+    deviceLogs,
+    proofOfPlay
   ] = await Promise.all([
     prisma.user.findMany(),
     prisma.client.findMany(),
@@ -87,7 +90,8 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
     prisma.device.findMany(),
     prisma.deviceCommand.findMany(),
     prisma.playbackEvent.findMany(),
-    prisma.deviceLog.findMany()
+    prisma.deviceLog.findMany(),
+    prisma.proofOfPlay.findMany()
   ]);
 
   return {
@@ -142,6 +146,19 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
       appVersion: entry.appVersion || "",
       osVersion: entry.osVersion || "",
       networkStatus: entry.networkStatus || ""
+    })),
+    proofOfPlay: proofOfPlay.map((entry) => ({
+      ...withIsoDates(entry),
+      startedAt: toIsoOrEmpty(entry.startedAt),
+      finishedAt: toIsoOrEmpty(entry.finishedAt),
+      occurredAt: toIso(entry.occurredAt),
+      scheduleId: entry.scheduleId || "",
+      playlistId: entry.playlistId || "",
+      mediaId: entry.mediaId || "",
+      playbackItemId: entry.playbackItemId || "",
+      eventId: entry.eventId || "",
+      errorMessage: entry.errorMessage || "",
+      appVersion: entry.appVersion || ""
     }))
   };
 }
@@ -152,6 +169,7 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
   await prisma.$transaction(async (tx) => {
     await tx.auditLog.deleteMany();
     await tx.session.deleteMany();
+    await tx.proofOfPlay.deleteMany();
     await tx.deviceLog.deleteMany();
     await tx.deviceCommand.deleteMany();
     await tx.playbackEvent.deleteMany();
@@ -177,6 +195,7 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await createMany(tx.deviceCommand, batches.deviceCommands);
     await createMany(tx.playbackEvent, batches.playbackEvents);
     await createMany(tx.deviceLog, batches.deviceLogs);
+    await createMany(tx.proofOfPlay, batches.proofOfPlay);
   });
 }
 
@@ -376,6 +395,32 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       updatedAt: toDate(entry.updatedAt)
     }));
 
+  const proofOfPlay = ((database as any).proofOfPlay || [])
+    .filter((entry) => deviceIds.has(entry.deviceId))
+    .map((entry) => ({
+      id: entry.id,
+      deviceId: entry.deviceId,
+      status: proofStatusOrDefault(entry.status),
+      sourceType: sourceTypeOrDefault(entry.sourceType),
+      playlistId: entry.playlistId || "",
+      scheduleId: entry.scheduleId || "",
+      mediaId: entry.mediaId || "",
+      playbackItemId: entry.playbackItemId || "",
+      eventId: entry.eventId || "",
+      mediaTitle: entry.mediaTitle || "",
+      mediaKind: mediaKindOrDefault(entry.mediaKind),
+      startedAt: toNullableDate(entry.startedAt),
+      finishedAt: toNullableDate(entry.finishedAt),
+      occurredAt: toDate(entry.occurredAt || entry.createdAt),
+      durationSeconds: Number(entry.durationSeconds || 0) || 0,
+      checksum: entry.checksum || "",
+      contentVersion: Number(entry.contentVersion || 1) || 1,
+      errorMessage: entry.errorMessage || "",
+      appVersion: entry.appVersion || "",
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
+
   return {
     users,
     clients,
@@ -388,7 +433,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     devices,
     deviceCommands,
     playbackEvents,
-    deviceLogs
+    deviceLogs,
+    proofOfPlay
   };
 }
 
@@ -458,6 +504,14 @@ function triggerModeOrDefault(value: string) {
 
 function logSeverityOrDefault(value: string) {
   return ["info", "warn", "error"].includes(value) ? value : "info";
+}
+
+function proofStatusOrDefault(value: string) {
+  return ["started", "finished", "error"].includes(value) ? value : "started";
+}
+
+function sourceTypeOrDefault(value: string) {
+  return ["playlist", "event"].includes(value) ? value : "playlist";
 }
 
 function toDate(value: string | Date | null | undefined) {

@@ -266,6 +266,10 @@ button:disabled {
   grid-template-columns: minmax(11rem, 1fr) minmax(12rem, 1fr) minmax(9rem, 0.8fr) minmax(16rem, 1.4fr) auto;
 }
 
+.report-filter-bar {
+  grid-template-columns: minmax(11rem, 1fr) minmax(12rem, 1fr) minmax(9rem, 0.8fr) minmax(16rem, 1.4fr) auto auto;
+}
+
 .card-grid.two-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -581,6 +585,15 @@ button:disabled {
   align-items: flex-start;
 }
 
+.proof-card {
+  align-items: flex-start;
+}
+
+.offline-alert-panel {
+  border-color: rgba(255, 92, 92, 0.24);
+  background: rgba(80, 16, 24, 0.28);
+}
+
 .log-stack {
   display: block;
   max-width: 100%;
@@ -721,6 +734,7 @@ button:disabled {
   .inline-grid.triple,
   .device-filter-bar,
   .logs-filter-bar,
+  .report-filter-bar,
   .device-center-grid,
   .device-detail-grid,
   .live-command-panel {

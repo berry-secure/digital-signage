@@ -4,6 +4,7 @@ import {
   buildDeviceQuickUpdate,
   filterDeviceCenterDevices,
   getDeviceConnection,
+  getOfflineDeviceAlerts,
   getDeviceType,
   getDeviceTypeLabel,
   summarizeDeviceFleet
@@ -38,6 +39,23 @@ describe("Device Center helpers", () => {
       offline: 1,
       blackout: 1
     });
+  });
+
+  it("builds offline alert rows only for approved devices past the heartbeat window", () => {
+    const alerts = getOfflineDeviceAlerts(
+      [
+        device({ id: "pending", approvalStatus: "pending", lastSeenAt: "" }),
+        device({ id: "online", online: true, lastSeenAt: "2026-04-25T00:00:00.000Z" }),
+        device({ id: "stale", online: false, lastSeenAt: "2026-04-24T23:57:30.000Z" }),
+        device({ id: "offline", name: "Lobby", online: false, lastSeenAt: "2026-04-24T23:52:00.000Z" })
+      ],
+      now()
+    );
+
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].device.id, "offline");
+    assert.equal(alerts[0].minutesOffline, 8);
+    assert.match(alerts[0].message, /Lobby/);
   });
 
   it("builds quick update payloads without dropping required assignment fields", () => {

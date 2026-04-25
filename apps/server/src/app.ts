@@ -82,6 +82,8 @@ const mediaKinds = new Set(["video", "image", "audio"]);
 const playbackEventTypes = new Set(["audio", "visual"]);
 const playbackEventTriggerModes = new Set(["items", "minutes"]);
 const deviceLogSeverities = new Set(["info", "warn", "error"]);
+const proofOfPlayStatuses = new Set(["started", "finished", "error"]);
+const playbackSourceTypes = new Set(["playlist", "event"]);
 
 export function resolveServerConfig(config: ServerConfig = {}) {
   const env = config.env || process.env;
@@ -374,6 +376,7 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
   database.media = database.media.filter((entry) => entry.clientId !== clientId);
   database.deviceCommands = database.deviceCommands.filter((entry) => !resetDeviceIds.includes(entry.deviceId));
   database.playbackEvents = database.playbackEvents.filter((entry) => entry.clientId !== clientId);
+  database.proofOfPlay = database.proofOfPlay.filter((entry) => !resetDeviceIds.includes(entry.deviceId));
 
   await Promise.all(mediaToDelete.map((entry) => removeUploadFile(entry.fileName)));
   await persistDatabase();
@@ -482,6 +485,8 @@ app.post("/api/media", requireAuth, upload.single("file"), async (req, res) => {
     hasAudio: String(req.body?.hasAudio || "").toLowerCase() === "true",
     status: req.body?.status === "draft" ? "draft" : "published",
     tags: String(req.body?.tags || "").trim(),
+    checksum: await checksumFile(join(uploadsDir, req.file.filename)),
+    contentVersion: 1,
     createdAt: nowIso(),
     updatedAt: nowIso()
   };
@@ -794,6 +799,7 @@ app.delete("/api/devices/:id", requireAuth, async (req, res) => {
   database.devices = database.devices.filter((entry) => entry.id !== req.params.id);
   database.deviceCommands = database.deviceCommands.filter((entry) => entry.deviceId !== req.params.id);
   database.deviceLogs = database.deviceLogs.filter((entry) => entry.deviceId !== req.params.id);
+  database.proofOfPlay = database.proofOfPlay.filter((entry) => entry.deviceId !== req.params.id);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -907,6 +913,63 @@ app.post("/api/player/logs", async (req, res) => {
   touch(device);
   await persistDatabase();
   res.status(201).json({ deviceLog: presentDeviceLog(deviceLog) });
+});
+
+app.post("/api/player/proof-of-play", async (req, res) => {
+  const serial = normalizeSerial(String(req.body?.serial || ""));
+  const secret = String(req.body?.secret || "").trim();
+  const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
+
+  if (!device) {
+    res.status(404).json({ message: "Nie znaleziono urządzenia dla proof of play." });
+    return;
+  }
+
+  const status = normalizeProofOfPlayStatus(req.body?.status);
+  if (!status) {
+    res.status(400).json({ message: "Proof of Play wymaga statusu started, finished albo error." });
+    return;
+  }
+
+  const mediaId = String(req.body?.mediaId || "").trim();
+  const media = mediaId ? findById(database.media, mediaId) : null;
+  const occurredAt =
+    String(req.body?.occurredAt || "").trim() ||
+    (status === "finished"
+      ? String(req.body?.finishedAt || "").trim()
+      : String(req.body?.startedAt || "").trim()) ||
+    nowIso();
+  const proofOfPlay = {
+    id: randomUUID(),
+    deviceId: device.id,
+    status,
+    sourceType: normalizePlaybackSourceType(req.body?.sourceType),
+    playlistId: String(req.body?.playlistId || "").trim(),
+    scheduleId: String(req.body?.scheduleId || "").trim(),
+    mediaId,
+    playbackItemId: String(req.body?.playbackItemId || "").trim(),
+    eventId: String(req.body?.eventId || "").trim(),
+    mediaTitle: String(req.body?.mediaTitle || media?.title || "").trim(),
+    mediaKind: normalizeMediaKind(req.body?.mediaKind || media?.kind || ""),
+    startedAt: String(req.body?.startedAt || (status === "started" ? occurredAt : "")).trim(),
+    finishedAt: String(req.body?.finishedAt || (status === "finished" ? occurredAt : "")).trim(),
+    occurredAt,
+    durationSeconds: Math.max(Number(req.body?.durationSeconds || media?.durationSeconds || 0), 0),
+    checksum: String(req.body?.checksum || media?.checksum || "").trim(),
+    contentVersion: Math.max(Number(req.body?.contentVersion || media?.contentVersion || 1), 1),
+    errorMessage: String(req.body?.errorMessage || "").trim(),
+    appVersion: String(req.body?.appVersion || device.appVersion || "").trim(),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  database.proofOfPlay.unshift(proofOfPlay);
+  database.proofOfPlay = database.proofOfPlay.slice(0, 10_000);
+  device.lastSeenAt = nowIso();
+  device.lastPlaybackAt = nowIso();
+  touch(device);
+  await persistDatabase();
+  res.status(201).json({ proofOfPlay: presentProofOfPlay(proofOfPlay) });
 });
 
 app.post("/api/player/commands/:id/ack", async (req, res) => {
@@ -1034,7 +1097,10 @@ function buildBootstrapPayload(req) {
     ).map(sanitizeUser),
     installation: {
       apiBaseUrl: baseUrl,
-      apkUrl: `${baseUrl}/app/maasck.apk`
+      apkUrl: `${baseUrl}/app/maasck.apk`,
+      storageMode,
+      databaseConfigured: Boolean(databaseUrl),
+      dataDir
     },
     clients: [...database.clients].sort(sortByName),
     channels: [...database.channels].sort(sortByName),
@@ -1046,7 +1112,8 @@ function buildBootstrapPayload(req) {
     playbackEvents: [...database.playbackEvents]
       .sort(sortPlaybackEvents)
       .map((entry) => presentPlaybackEvent(entry, baseUrl)),
-    deviceLogs: [...database.deviceLogs].sort(sortByCreatedDesc).slice(0, 250).map((entry) => presentDeviceLog(entry))
+    deviceLogs: [...database.deviceLogs].sort(sortByCreatedDesc).slice(0, 250).map((entry) => presentDeviceLog(entry)),
+    proofOfPlay: [...database.proofOfPlay].sort(sortProofOfPlayDesc).slice(0, 1000).map((entry) => presentProofOfPlay(entry))
   };
 }
 
@@ -1080,7 +1147,7 @@ function buildPlaybackPayload(device, req) {
     };
   }
 
-  const queue = buildPlaylistQueue(resolvedPlaylist.id, baseUrl);
+  const queue = buildPlaylistQueue(resolvedPlaylist.id, baseUrl, activeSchedule?.id || "");
   if (!queue.length) {
     return {
       mode: "idle",
@@ -1112,7 +1179,7 @@ function emptyPlayback() {
   };
 }
 
-function buildPlaylistQueue(playlistId, baseUrl) {
+function buildPlaylistQueue(playlistId, baseUrl, scheduleId = "") {
   return database.playlistItems
     .filter((entry) => entry.playlistId === playlistId)
     .sort((left, right) => left.sortOrder - right.sortOrder)
@@ -1127,12 +1194,16 @@ function buildPlaylistQueue(playlistId, baseUrl) {
       return Array.from({ length: repeats }, (_, index) => ({
         id: `${entry.id}:${index}`,
         playlistId,
+        scheduleId,
+        mediaId: media.id,
         title: media.title,
         kind: media.kind,
         url,
         durationSeconds: Number(media.durationSeconds || 10) || 10,
         volumePercent: clampNumber(Number(entry.volumePercent || 100), 0, 100),
         hasAudio: Boolean(media.hasAudio || media.kind === "audio"),
+        checksum: media.checksum || "",
+        contentVersion: Number(media.contentVersion || 1) || 1,
         sourceType: "playlist"
       }));
     });
@@ -1159,12 +1230,16 @@ function buildActivePlaybackEvents(device, baseUrl) {
           media: {
             id: `media:${media.id}`,
             playlistId: "",
+            scheduleId: "",
+            mediaId: media.id,
             title: media.title,
             kind: media.kind,
             url: `${baseUrl}/uploads/${media.fileName}`,
             durationSeconds: Number(media.durationSeconds || 10) || 10,
             volumePercent: clampNumber(Number(device.volumePercent || 80), 0, 100),
             hasAudio: Boolean(media.hasAudio || media.kind === "audio"),
+            checksum: media.checksum || "",
+            contentVersion: Number(media.contentVersion || 1) || 1,
             sourceType: "event"
           }
         }
@@ -1197,6 +1272,8 @@ function buildPlaybackQueueWithEvents(queue, events) {
       result.push({
         ...event.media,
         id: `event:${event.id}:${occurrence}`,
+        playlistId: baseEntry.playlistId || "",
+        scheduleId: baseEntry.scheduleId || "",
         title: event.name || event.media.title,
         sourceType: "event",
         eventId: event.id
@@ -1292,6 +1369,7 @@ function presentPlaybackEvent(event, baseUrl) {
 function presentDeviceLog(log) {
   const device = findById(database.devices, log.deviceId);
   const client = device?.clientId ? findById(database.clients, device.clientId) : null;
+  const channel = device?.channelId ? findById(database.channels, device.channelId) : null;
   return {
     ...log,
     severity: normalizeDeviceLogSeverity(log.severity),
@@ -1303,7 +1381,43 @@ function presentDeviceLog(log) {
     deviceName: device?.name || "",
     deviceSerial: device?.serial || "",
     clientId: device?.clientId || "",
-    clientName: client?.name || ""
+    clientName: client?.name || "",
+    channelId: device?.channelId || "",
+    channelName: channel?.name || ""
+  };
+}
+
+function presentProofOfPlay(entry) {
+  const device = findById(database.devices, entry.deviceId);
+  const client = device?.clientId ? findById(database.clients, device.clientId) : null;
+  const channel = device?.channelId ? findById(database.channels, device.channelId) : null;
+  const media = entry.mediaId ? findById(database.media, entry.mediaId) : null;
+
+  return {
+    ...entry,
+    status: normalizeProofOfPlayStatus(entry.status) || "started",
+    sourceType: normalizePlaybackSourceType(entry.sourceType),
+    playlistId: entry.playlistId || "",
+    scheduleId: entry.scheduleId || "",
+    mediaId: entry.mediaId || "",
+    playbackItemId: entry.playbackItemId || "",
+    eventId: entry.eventId || "",
+    mediaTitle: entry.mediaTitle || media?.title || "",
+    mediaKind: normalizeMediaKind(entry.mediaKind || media?.kind || ""),
+    startedAt: entry.startedAt || "",
+    finishedAt: entry.finishedAt || "",
+    occurredAt: entry.occurredAt || entry.createdAt || "",
+    durationSeconds: Number(entry.durationSeconds || 0) || 0,
+    checksum: entry.checksum || media?.checksum || "",
+    contentVersion: Number(entry.contentVersion || media?.contentVersion || 1) || 1,
+    errorMessage: entry.errorMessage || "",
+    appVersion: entry.appVersion || device?.appVersion || "",
+    deviceName: device?.name || "",
+    deviceSerial: device?.serial || "",
+    clientId: device?.clientId || "",
+    clientName: client?.name || "",
+    channelId: device?.channelId || "",
+    channelName: channel?.name || ""
   };
 }
 
@@ -1319,6 +1433,8 @@ function presentPlayerCommand(command) {
 function enrichMedia(media, baseUrl) {
   return {
     ...media,
+    checksum: media.checksum || "",
+    contentVersion: Number(media.contentVersion || 1) || 1,
     url: `${baseUrl}/uploads/${media.fileName}`
   };
 }
@@ -1461,6 +1577,14 @@ function sortByCreatedDesc(left, right) {
   return new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime();
 }
 
+function sortProofOfPlayDesc(left, right) {
+  return (
+    new Date(right.occurredAt || right.createdAt || 0).getTime() -
+      new Date(left.occurredAt || left.createdAt || 0).getTime() ||
+    new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
+  );
+}
+
 function sortByPriorityDesc(left, right) {
   return Number(right.priority || 0) - Number(left.priority || 0);
 }
@@ -1547,6 +1671,16 @@ function normalizePlaybackEventTriggerMode(value) {
 function normalizeDeviceLogSeverity(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return deviceLogSeverities.has(normalized) ? normalized : "info";
+}
+
+function normalizeProofOfPlayStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return proofOfPlayStatuses.has(normalized) ? normalized : "";
+}
+
+function normalizePlaybackSourceType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return playbackSourceTypes.has(normalized) ? normalized : "playlist";
 }
 
 function buildDeviceCommandPayload(type, payload) {
@@ -1665,7 +1799,8 @@ async function loadDatabase() {
       devices: Array.isArray(parsed.devices) ? parsed.devices : [],
       deviceCommands: Array.isArray(parsed.deviceCommands) ? parsed.deviceCommands : [],
       playbackEvents: Array.isArray(parsed.playbackEvents) ? parsed.playbackEvents : [],
-      deviceLogs: Array.isArray(parsed.deviceLogs) ? parsed.deviceLogs : []
+      deviceLogs: Array.isArray(parsed.deviceLogs) ? parsed.deviceLogs : [],
+      proofOfPlay: Array.isArray(parsed.proofOfPlay) ? parsed.proofOfPlay : []
     };
   } catch {
     const initial = {
@@ -1679,7 +1814,8 @@ async function loadDatabase() {
       devices: [],
       deviceCommands: [],
       playbackEvents: [],
-      deviceLogs: []
+      deviceLogs: [],
+      proofOfPlay: []
     };
     await fs.writeFile(databasePath, JSON.stringify(initial, null, 2));
     return initial;
@@ -1706,6 +1842,11 @@ async function persistDatabase() {
 async function ensureDirectories() {
   await fs.mkdir(dataDir, { recursive: true });
   await fs.mkdir(uploadsDir, { recursive: true });
+}
+
+async function checksumFile(path) {
+  const file = await fs.readFile(path);
+  return createHash("sha256").update(file).digest("hex");
 }
 
 async function removeUploadFile(fileName) {
