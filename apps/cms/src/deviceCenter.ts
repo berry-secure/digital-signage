@@ -23,10 +23,13 @@ export type DeviceFleetSummary = {
 const offlineWindowMs = 5 * 60 * 1000;
 const fallbackDeviceType: DeviceType = "video_standard";
 const deviceTypeLabels: Record<DeviceType, string> = {
-  music_mini: "Music mini",
-  music_max: "Music max",
-  video_standard: "Video standard",
-  video_premium: "Video Premium"
+  music_mini: "Music Mini",
+  music_max: "Music Max",
+  video_standard: "Video Standard",
+  video_premium: "Video Premium",
+  streaming: "Streaming",
+  android_tv: "AndroidTV",
+  mobile_app: "MobileApp"
 };
 
 export function getDeviceConnection(device: DeviceRecord, now = new Date()): DeviceConnection {

@@ -193,13 +193,13 @@ describe("MVP API contract", () => {
         channelId: channel.body.channel.id,
         locationLabel: "Lobby",
         notes: "",
-        playerType: "video_premium",
+        playerType: "mobile_app",
         desiredDisplayState: "active",
         volumePercent: 70
       });
 
     assert.equal(approved.status, 200);
-    assert.equal(approved.body.device.playerType, "video_premium");
+    assert.equal(approved.body.device.playerType, "mobile_app");
 
     const queued = await request(isolatedApp)
       .post(`/api/devices/${approved.body.device.id}/commands`)

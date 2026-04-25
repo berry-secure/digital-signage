@@ -342,7 +342,11 @@ function roleOrDefault(value: string) {
 }
 
 function playerTypeOrDefault(value: string) {
-  return ["music_mini", "music_max", "video_standard", "video_premium"].includes(value) ? value : "video_standard";
+  return ["music_mini", "music_max", "video_standard", "video_premium", "streaming", "android_tv", "mobile_app"].includes(
+    value
+  )
+    ? value
+    : "video_standard";
 }
 
 function commandTypeOrDefault(value: string) {

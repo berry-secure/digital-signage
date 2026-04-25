@@ -5,6 +5,7 @@ import {
   filterDeviceCenterDevices,
   getDeviceConnection,
   getDeviceType,
+  getDeviceTypeLabel,
   summarizeDeviceFleet
 } from "./deviceCenter";
 import type { DeviceRecord } from "./types";
@@ -98,10 +99,23 @@ describe("Device Center helpers", () => {
     ]);
   });
 
-  it("classifies player product type from the assigned CMS field", () => {
-    assert.equal(getDeviceType(device({ playerType: "music_mini" })), "music_mini");
-    assert.equal(getDeviceType(device({ playerType: "music_max" })), "music_max");
-    assert.equal(getDeviceType(device({ playerType: "video_premium" })), "video_premium");
+  it("classifies and labels the full player product type list from the assigned CMS field", () => {
+    const expected = [
+      ["music_mini", "Music Mini"],
+      ["music_max", "Music Max"],
+      ["video_standard", "Video Standard"],
+      ["video_premium", "Video Premium"],
+      ["streaming", "Streaming"],
+      ["android_tv", "AndroidTV"],
+      ["mobile_app", "MobileApp"]
+    ] as const;
+
+    for (const [playerType, label] of expected) {
+      const entry = device({ playerType });
+      assert.equal(getDeviceType(entry), playerType);
+      assert.equal(getDeviceTypeLabel(entry), label);
+    }
+
     assert.equal(getDeviceType(device({ playerType: "" })), "video_standard");
   });
 });

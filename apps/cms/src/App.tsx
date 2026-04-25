@@ -152,10 +152,13 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
 ];
 
 const playerTypeOptions: Array<{ value: DeviceCenterFilters["type"]; label: string }> = [
-  { value: "music_mini", label: "Music mini" },
-  { value: "music_max", label: "Music max" },
-  { value: "video_standard", label: "Video standard" },
-  { value: "video_premium", label: "Video Premium" }
+  { value: "music_mini", label: "Music Mini" },
+  { value: "music_max", label: "Music Max" },
+  { value: "video_standard", label: "Video Standard" },
+  { value: "video_premium", label: "Video Premium" },
+  { value: "streaming", label: "Streaming" },
+  { value: "android_tv", label: "AndroidTV" },
+  { value: "mobile_app", label: "MobileApp" }
 ];
 
 const deviceTypeOptions: Array<{ value: DeviceCenterFilters["type"] | ""; label: string }> = [

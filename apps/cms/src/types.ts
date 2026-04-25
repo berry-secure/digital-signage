@@ -2,7 +2,14 @@ export type UserRole = "owner" | "manager" | "editor";
 export type DeviceApprovalStatus = "pending" | "approved";
 export type DeviceDisplayState = "active" | "blackout";
 export type DevicePlayerState = "waiting" | "idle" | "playing";
-export type DevicePlayerType = "music_mini" | "music_max" | "video_standard" | "video_premium";
+export type DevicePlayerType =
+  | "music_mini"
+  | "music_max"
+  | "video_standard"
+  | "video_premium"
+  | "streaming"
+  | "android_tv"
+  | "mobile_app";
 export type DeviceCommandType =
   | "reboot_os"
   | "restart_app"

@@ -53,7 +53,15 @@ let sessions = new Map<string, string>();
 let database: any = null;
 let persistQueue = Promise.resolve();
 
-const devicePlayerTypes = new Set(["music_mini", "music_max", "video_standard", "video_premium"]);
+const devicePlayerTypes = new Set([
+  "music_mini",
+  "music_max",
+  "video_standard",
+  "video_premium",
+  "streaming",
+  "android_tv",
+  "mobile_app"
+]);
 const deviceCommandTypes = new Set([
   "reboot_os",
   "restart_app",
