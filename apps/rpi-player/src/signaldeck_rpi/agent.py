@@ -13,7 +13,7 @@ from .cms import CmsClient
 from .commands import route_command
 from .config import PlayerConfig, load_config
 from .identity import PlayerIdentity, load_or_create_system_identity
-from .playback import MvpProcessController, build_mpv_playlist_command, playback_decision
+from .playback import MvpProcessController, build_mpv_playlist_command, playback_decision, probe_drm_connector_states
 
 LOGGER = logging.getLogger("signaldeck.agent")
 
@@ -36,6 +36,7 @@ class AgentRuntime:
     cache: MediaCache
     playback_controller: Any = field(default_factory=MvpProcessController)
     states: dict[str, OutputState] = field(default_factory=dict)
+    connector_status: dict[str, bool] | None = None
 
     def build_session_payloads(self, player_state: str = "idle", active_item_title: str = "") -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
@@ -107,6 +108,12 @@ class AgentRuntime:
 
     def _sync_playback(self, output: str, serial: str, secret: str, queue: list[dict[str, Any]]) -> None:
         state = self.states.setdefault(output, OutputState())
+        if not self._is_output_connected(output):
+            self.playback_controller.stop(output)
+            state.current_item_id = ""
+            self._log(serial, secret, "warn", "display", f"{output} is disconnected; playback paused", {"output": output})
+            return
+
         if state.desired_display_state == "blackout":
             self.playback_controller.stop(output)
             state.current_item_id = ""
@@ -151,6 +158,13 @@ class AgentRuntime:
             )
         except Exception:
             LOGGER.debug("failed to post CMS log", exc_info=True)
+
+    def _is_output_connected(self, output: str) -> bool:
+        if self.connector_status is not None:
+            return self.connector_status.get(output, False)
+        states = probe_drm_connector_states()
+        connector = states.get(output)
+        return True if connector is None else connector.connected
 
 
 def create_runtime(

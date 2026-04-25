@@ -16,7 +16,7 @@ from urllib.parse import parse_qs
 
 from .config import PlayerConfig, load_config
 from .identity import PlayerIdentity, load_or_create_system_identity
-from .playback import probe_drm_connectors
+from .playback import probe_drm_connector_states
 
 
 @dataclass
@@ -28,14 +28,16 @@ class StatusProvider:
     boot_dir: Path = Path("/boot/firmware")
 
     def snapshot(self) -> dict[str, Any]:
-        connectors = probe_drm_connectors()
+        connectors = probe_drm_connector_states()
         outputs = {}
         for output in self.config.outputs:
             identity = self.identity.outputs.get(output.name)
+            connector = connectors.get(output.name)
             outputs[output.name] = {
                 "enabled": output.enabled,
                 "serial": identity.serial if identity else "",
-                "connector": connectors.get(output.name, ""),
+                "connector": connector.sysfs_name if connector else "",
+                "connectorStatus": connector.status if connector else "not detected",
                 "manifestItems": self._manifest_count(output.name),
             }
         return {
@@ -95,7 +97,7 @@ class WebUiApp:
         status = self.render_status_json()
         system = status["system"]
         output_rows = "\n".join(
-            f"<tr><td>{html.escape(name)}</td><td>{html.escape(value['serial'])}</td><td>{html.escape(str(value['enabled']))}</td><td>{html.escape(value.get('connector') or 'not detected')}</td><td>{html.escape(str(value.get('manifestItems', 0)))}</td></tr>"
+            f"<tr><td>{html.escape(name)}</td><td>{html.escape(value['serial'])}</td><td>{html.escape(str(value['enabled']))}</td><td>{html.escape(value.get('connector') or 'not detected')}</td><td>{html.escape(value.get('connectorStatus') or 'unknown')}</td><td>{html.escape(str(value.get('manifestItems', 0)))}</td></tr>"
             for name, value in status["outputs"].items()
         )
         return f"""<!doctype html>
@@ -141,7 +143,7 @@ class WebUiApp:
       <p><a href="/api/status">Open raw JSON status</a></p>
     </section>
     <table>
-      <thead><tr><th>Output</th><th>Serial</th><th>Enabled</th><th>Connector</th><th>Manifest items</th></tr></thead>
+      <thead><tr><th>Output</th><th>Serial</th><th>Enabled</th><th>Connector</th><th>Status</th><th>Manifest items</th></tr></thead>
       <tbody>{output_rows}</tbody>
     </table>
     <section>

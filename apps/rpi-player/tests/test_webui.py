@@ -42,6 +42,7 @@ class WebUiTest(unittest.TestCase):
         self.assertIn("Restart playback", html)
         self.assertIn("Diagnostics", html)
         self.assertIn("CPU load", html)
+        self.assertIn("Manifest items", html)
 
     def test_webui_save_config_updates_player_toml(self):
         with tempfile.TemporaryDirectory() as directory:

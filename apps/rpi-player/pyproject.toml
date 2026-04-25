@@ -8,6 +8,8 @@ dependencies = []
 [project.scripts]
 signaldeck-agent = "signaldeck_agent:main"
 signaldeck-webui = "signaldeck_webui:main"
+signaldeck-hotkeys = "signaldeck_hotkeys:main"
+signaldeck-service-console = "signaldeck_service_console:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

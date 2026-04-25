@@ -53,6 +53,7 @@ install_packages() {
     ca-certificates curl jq openssl git \
     python3 python3-venv python3-pip \
     network-manager avahi-daemon \
+    kbd \
     mpv \
     unclutter \
     unattended-upgrades \
@@ -163,6 +164,8 @@ write_systemd_units() {
   install -m 0644 "${APP_DIR}/systemd/signaldeck-agent.service" /etc/systemd/system/signaldeck-agent.service
   install -m 0644 "${APP_DIR}/systemd/signaldeck-webui.service" /etc/systemd/system/signaldeck-webui.service
   install -m 0644 "${APP_DIR}/systemd/signaldeck-setup-mode.service" /etc/systemd/system/signaldeck-setup-mode.service
+  install -m 0644 "${APP_DIR}/systemd/signaldeck-hotkeys.service" /etc/systemd/system/signaldeck-hotkeys.service
+  install -m 0644 "${APP_DIR}/systemd/signaldeck-service-console.service" /etc/systemd/system/signaldeck-service-console.service
   systemctl daemon-reload
 }
 
@@ -207,10 +210,11 @@ configure_hotspot_profile() {
 
 enable_services() {
   log "Enabling services."
-  systemctl enable signaldeck-webui.service signaldeck-agent.service signaldeck-setup-mode.service
+  systemctl enable signaldeck-webui.service signaldeck-agent.service signaldeck-setup-mode.service signaldeck-hotkeys.service
   systemctl restart signaldeck-webui.service
   systemctl restart signaldeck-agent.service || true
   systemctl restart signaldeck-setup-mode.service || true
+  systemctl restart signaldeck-hotkeys.service || true
   systemctl enable unattended-upgrades.service >/dev/null 2>&1 || true
   ufw allow 8080/tcp >/dev/null 2>&1 || true
 }

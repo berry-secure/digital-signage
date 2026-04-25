@@ -126,6 +126,33 @@ class AgentRuntimeTest(unittest.TestCase):
 
             self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1", "HDMI-A-2"])
 
+    def test_poll_once_skips_disconnected_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = FakeMediaCache(root)
+            playback = FakePlaybackController()
+            runtime = self._runtime(root, FakeCmsClient(), cache, playback)
+            runtime.connector_status = {"HDMI-A-1": True, "HDMI-A-2": False}
+
+            runtime.poll_once()
+
+            self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1"])
+            self.assertEqual(playback.stopped, ["HDMI-A-2"])
+
+    def test_poll_once_starts_output_after_hotplug(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = FakeMediaCache(root)
+            playback = FakePlaybackController()
+            runtime = self._runtime(root, FakeCmsClient(), cache, playback)
+            runtime.connector_status = {"HDMI-A-1": True, "HDMI-A-2": False}
+            runtime.poll_once()
+
+            runtime.connector_status = {"HDMI-A-1": True, "HDMI-A-2": True}
+            runtime.poll_once()
+
+            self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1", "HDMI-A-2"])
+
     def _runtime(self, root: Path, cms=None, cache=None, playback=None):
         config = default_config()
         identity = load_or_create_identity(root / "identity.json", "MK5ABC123", config.outputs)

@@ -13,6 +13,17 @@ class PlaybackDecision:
     message: str
 
 
+@dataclass(frozen=True)
+class DrmConnectorState:
+    name: str
+    sysfs_name: str
+    status: str
+
+    @property
+    def connected(self) -> bool:
+        return self.status == "connected"
+
+
 def playback_decision(item: dict[str, Any]) -> PlaybackDecision:
     kind = str(item.get("kind") or "").lower()
     if kind == "audio":
@@ -70,8 +81,12 @@ def build_mpv_playlist_command(
 
 
 def probe_drm_connectors(sys_class_drm: str | Path = "/sys/class/drm") -> dict[str, str]:
+    return {name: state.sysfs_name for name, state in probe_drm_connector_states(sys_class_drm).items()}
+
+
+def probe_drm_connector_states(sys_class_drm: str | Path = "/sys/class/drm") -> dict[str, DrmConnectorState]:
     root = Path(sys_class_drm)
-    connectors: dict[str, str] = {}
+    connectors: dict[str, DrmConnectorState] = {}
     if not root.exists():
         return connectors
 
@@ -80,7 +95,7 @@ def probe_drm_connectors(sys_class_drm: str | Path = "/sys/class/drm") -> dict[s
             continue
         for suffix in ("HDMI-A-1", "HDMI-A-2"):
             if entry.name.endswith(suffix):
-                connectors[suffix] = entry.name
+                connectors[suffix] = DrmConnectorState(suffix, entry.name, _read_connector_status(entry))
     return connectors
 
 
@@ -112,3 +127,13 @@ def _clamp_int(value: int | float, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         number = minimum
     return max(minimum, min(maximum, number))
+
+
+def _read_connector_status(path: Path) -> str:
+    status_path = path / "status"
+    if not status_path.exists():
+        return "unknown"
+    try:
+        return status_path.read_text(encoding="utf-8").strip() or "unknown"
+    except OSError:
+        return "unknown"
