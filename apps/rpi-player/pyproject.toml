@@ -1,0 +1,16 @@
+[project]
+name = "signaldeck-rpi-player"
+version = "0.1.0"
+description = "Signal Deck Raspberry Pi 5 Video Premium player agent"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+signaldeck-agent = "signaldeck_agent:main"
+signaldeck-webui = "signaldeck_webui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
