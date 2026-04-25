@@ -166,6 +166,15 @@ write_systemd_units() {
   systemctl daemon-reload
 }
 
+configure_kiosk_console() {
+  log "Configuring kiosk console behavior."
+  systemctl disable --now getty@tty1.service >/dev/null 2>&1 || true
+  if [[ -f /boot/firmware/cmdline.txt ]] && ! grep -q 'vt.global_cursor_default=0' /boot/firmware/cmdline.txt; then
+    cp /boot/firmware/cmdline.txt "${BACKUP_DIR}/cmdline.txt.$(date +%Y%m%d%H%M%S)"
+    sed -i '1 s/$/ quiet loglevel=1 vt.global_cursor_default=0/' /boot/firmware/cmdline.txt
+  fi
+}
+
 configure_hotspot_profile() {
   if ! command -v nmcli >/dev/null 2>&1; then
     log "nmcli not available; skipping hotspot profile."
@@ -222,6 +231,7 @@ main() {
   install_application
   write_default_config
   write_systemd_units
+  configure_kiosk_console
   configure_hotspot_profile
   enable_services
   print_summary

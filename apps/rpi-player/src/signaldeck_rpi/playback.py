@@ -34,6 +34,8 @@ def build_mpv_command(
         "--no-terminal",
         "--really-quiet",
         "--fs",
+        "--force-window=immediate",
+        "--loop-playlist=inf",
         "--vo=drm",
         f"--drm-connector={connector}",
         f"--volume={_clamp_int(volume_percent, 0, 100)}",
@@ -41,6 +43,29 @@ def build_mpv_command(
     if kind == "image":
         command.extend(["--loop-file=no", f"--image-display-duration={max(int(duration_seconds or 10), 1)}", "--no-audio"])
     command.append(str(media_path))
+    return command
+
+
+def build_mpv_playlist_command(
+    media_paths: list[str | Path],
+    connector: str,
+    volume_percent: int | float,
+    image_duration_seconds: int | float = 10,
+) -> list[str]:
+    command = [
+        "mpv",
+        "--no-terminal",
+        "--really-quiet",
+        "--fs",
+        "--force-window=immediate",
+        "--loop-playlist=inf",
+        "--keep-open=yes",
+        "--vo=drm",
+        f"--drm-connector={connector}",
+        f"--volume={_clamp_int(volume_percent, 0, 100)}",
+        f"--image-display-duration={max(int(image_duration_seconds or 10), 1)}",
+    ]
+    command.extend(str(path) for path in media_paths)
     return command
 
 

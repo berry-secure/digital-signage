@@ -22,7 +22,10 @@ class FakeCmsClient(CmsClient):
             "device": {"approvalStatus": "approved", "desiredDisplayState": "active"},
             "playback": {
                 "mode": "playlist",
-                "queue": [{"id": "item:0", "kind": "video", "url": "https://cms.example.test/uploads/clip.mp4", "durationSeconds": 10}],
+                "queue": [
+                    {"id": "item:0", "kind": "video", "url": "https://cms.example.test/uploads/clip.mp4", "durationSeconds": 10},
+                    {"id": "item:1", "kind": "video", "url": "https://cms.example.test/uploads/clip-2.mp4", "durationSeconds": 12},
+                ],
             },
             "commands": [{"id": "command-1", "type": "force_playlist_update", "payload": {}}],
             "serverTime": "2026-04-25T00:00:00.000Z",
@@ -101,10 +104,15 @@ class AgentRuntimeTest(unittest.TestCase):
 
             runtime.poll_once()
 
-            self.assertEqual(cache.downloaded, [("HDMI-A-1", "item:0"), ("HDMI-A-2", "item:0")])
+            self.assertEqual(
+                cache.downloaded,
+                [("HDMI-A-1", "item:0"), ("HDMI-A-1", "item:1"), ("HDMI-A-2", "item:0"), ("HDMI-A-2", "item:1")],
+            )
             self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1", "HDMI-A-2"])
             self.assertIn("--drm-connector=HDMI-A-1", playback.played[0][1])
             self.assertIn("--drm-connector=HDMI-A-2", playback.played[1][1])
+            self.assertIn("--loop-playlist=inf", playback.played[0][1])
+            self.assertEqual(len([arg for arg in playback.played[0][1] if arg.endswith(".mp4")]), 2)
 
     def test_poll_once_does_not_restart_same_running_item(self):
         with tempfile.TemporaryDirectory() as directory:

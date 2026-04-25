@@ -13,7 +13,7 @@ from .cms import CmsClient
 from .commands import route_command
 from .config import PlayerConfig, load_config
 from .identity import PlayerIdentity, load_or_create_system_identity
-from .playback import MvpProcessController, build_mpv_command, playback_decision
+from .playback import MvpProcessController, build_mpv_playlist_command, playback_decision
 
 LOGGER = logging.getLogger("signaldeck.agent")
 
@@ -112,36 +112,30 @@ class AgentRuntime:
             state.current_item_id = ""
             return
 
-        item = _first_playable(queue)
-        if not item:
+        playable_items = _playable_items(queue)
+        if not playable_items:
             self.playback_controller.stop(output)
             state.current_item_id = ""
             return
 
-        item_id = str(item.get("id") or item.get("url") or "")
-        if state.current_item_id == item_id and self.playback_controller.is_running(output):
-            return
-
-        decision = playback_decision(item)
-        if decision.action != "play":
-            self._log(serial, secret, decision.severity, "playback", decision.message, {"output": output, "item": item})
+        queue_id = _queue_signature(playable_items)
+        if state.current_item_id == queue_id and self.playback_controller.is_running(output):
             return
 
         try:
-            media_path = self.cache.download(output, item)
-            command = build_mpv_command(
-                media_path,
+            media_paths = [self.cache.download(output, item) for item in playable_items]
+            command = build_mpv_playlist_command(
+                media_paths,
                 output,
-                str(item.get("kind") or "video"),
-                item.get("durationSeconds") or 10,
-                item.get("volumePercent") or 100,
+                playable_items[0].get("volumePercent") or 100,
+                _first_image_duration(playable_items),
             )
             self.playback_controller.play(output, command)
-            state.current_item_id = item_id
-            LOGGER.info("started playback on %s with item %s", output, item_id)
+            state.current_item_id = queue_id
+            LOGGER.info("started playback on %s with %s queued item(s)", output, len(playable_items))
         except Exception as error:
             LOGGER.error("failed to start playback on %s: %s", output, error)
-            self._log(serial, secret, "error", "playback", f"failed to start playback on {output}: {error}", {"output": output, "item": item})
+            self._log(serial, secret, "error", "playback", f"failed to start playback on {output}: {error}", {"output": output, "queue": playable_items})
 
     def _log(self, serial: str, secret: str, severity: str, component: str, message: str, context: dict[str, Any]) -> None:
         try:
@@ -197,8 +191,16 @@ def _queue_from_response(response: dict[str, Any]) -> list[dict[str, Any]]:
     return queue if isinstance(queue, list) else []
 
 
-def _first_playable(queue: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _playable_items(queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in queue if playback_decision(item).action == "play"]
+
+
+def _queue_signature(queue: list[dict[str, Any]]) -> str:
+    return "|".join(str(item.get("id") or item.get("url") or index) for index, item in enumerate(queue))
+
+
+def _first_image_duration(queue: list[dict[str, Any]]) -> int | float:
     for item in queue:
-        if playback_decision(item).action == "play":
-            return item
-    return None
+        if str(item.get("kind") or "").lower() == "image":
+            return item.get("durationSeconds") or 10
+    return 10
