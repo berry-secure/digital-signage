@@ -32,6 +32,14 @@ import {
   updateUser,
   uploadMedia
 } from "./api";
+import {
+  buildDeviceQuickUpdate,
+  filterDeviceCenterDevices,
+  getDeviceConnection,
+  summarizeDeviceFleet,
+  type DeviceCenterFilters,
+  type DeviceQuickAction
+} from "./deviceCenter";
 import type {
   BootstrapPayload,
   ChannelRecord,
@@ -137,6 +145,14 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "schedule", label: "Harmonogramy", hint: "emisja wg czasu" },
   { key: "devices", label: "Urządzenia", hint: "seriale i approval" },
   { key: "install", label: "Instalacja", hint: "APK i adres serwera" }
+];
+
+const deviceTypeOptions: Array<{ value: DeviceCenterFilters["type"]; label: string }> = [
+  { value: "", label: "Wszystkie typy" },
+  { value: "android", label: "Android / TV" },
+  { value: "rpi", label: "Android na RPi" },
+  { value: "web", label: "Web / przeglądarka" },
+  { value: "other", label: "Inne" }
 ];
 
 const emptyBootstrap: BootstrapPayload = {
@@ -257,6 +273,7 @@ function App() {
   const [playlistItemForm, setPlaylistItemForm] = useState<PlaylistItemFormState>(emptyPlaylistItemForm);
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(emptyScheduleForm);
   const [deviceForm, setDeviceForm] = useState<DeviceFormState>(emptyDeviceForm);
+  const [deviceFilters, setDeviceFilters] = useState<DeviceCenterFilters>({ clientId: "", query: "", type: "" });
 
   const clients = dashboard.clients;
   const channels = dashboard.channels;
@@ -264,8 +281,12 @@ function App() {
   const playlists = dashboard.playlists;
   const schedules = dashboard.schedules;
   const devices = dashboard.devices;
-  const pendingDevices = devices.filter((device) => device.approvalStatus === "pending");
-  const approvedDevices = devices.filter((device) => device.approvalStatus === "approved");
+  const filteredDevices = useMemo(() => filterDeviceCenterDevices(devices, deviceFilters), [devices, deviceFilters]);
+  const pendingDevices = filteredDevices.filter((device) => device.approvalStatus === "pending");
+  const approvedDevices = filteredDevices.filter((device) => device.approvalStatus === "approved");
+  const deviceFleet = useMemo(() => summarizeDeviceFleet(filteredDevices), [filteredDevices]);
+  const deviceFormIsPending = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "pending");
+  const deviceFormIsApproved = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "approved");
 
   const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
   const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
@@ -481,6 +502,15 @@ function App() {
       volumePercent: String(device.volumePercent || 80)
     });
     setActiveSection("devices");
+  }
+
+  function quickUpdateDevice(device: DeviceRecord, action: DeviceQuickAction) {
+    if (!token) {
+      return;
+    }
+
+    const successText = action === "blackout" ? `Blackout wysłany do ${device.name}.` : `Wake wysłany do ${device.name}.`;
+    void runMutation(async () => updateDevice(token, device.id, buildDeviceQuickUpdate(device, action)), successText);
   }
 
   function toggleScheduleDay(day: number) {
@@ -1800,7 +1830,113 @@ function App() {
 
         {activeSection === "devices" ? (
           <section className="section-stack">
+            <div className="panel device-filter-bar">
+              <Field label="Klient" htmlFor="device-filter-client">
+                <select
+                  id="device-filter-client"
+                  name="device-filter-client"
+                  value={deviceFilters.clientId}
+                  onChange={(event) => setDeviceFilters((current) => ({ ...current, clientId: event.target.value }))}
+                >
+                  <option value="">Wszyscy klienci</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Szukaj" htmlFor="device-filter-query">
+                <input
+                  id="device-filter-query"
+                  name="device-filter-query"
+                  type="search"
+                  value={deviceFilters.query}
+                  onChange={(event) => setDeviceFilters((current) => ({ ...current, query: event.target.value }))}
+                  placeholder="Serial, nazwa, lokalizacja, APK..."
+                />
+              </Field>
+              <Field label="Typ playera" htmlFor="device-filter-type">
+                <select
+                  id="device-filter-type"
+                  name="device-filter-type"
+                  value={deviceFilters.type}
+                  onChange={(event) =>
+                    setDeviceFilters((current) => ({
+                      ...current,
+                      type: event.target.value as DeviceCenterFilters["type"]
+                    }))
+                  }
+                >
+                  {deviceTypeOptions.map((option) => (
+                    <option key={option.value || "all"} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setDeviceFilters({ clientId: "", query: "", type: "" })}
+                disabled={!deviceFilters.clientId && !deviceFilters.query && !deviceFilters.type}
+              >
+                Wyczyść
+              </button>
+            </div>
+
+            <div className="stats-grid device-stats">
+              <article className="stat-card">
+                <span>Łącznie</span>
+                <strong>{deviceFleet.total}</strong>
+                <small>{deviceFleet.approved} zatwierdzonych</small>
+              </article>
+              <article className="stat-card">
+                <span>Online</span>
+                <strong>{deviceFleet.online}</strong>
+                <small>{deviceFleet.stale} z heartbeat w ostatnie 5 minut</small>
+              </article>
+              <article className="stat-card">
+                <span>Offline</span>
+                <strong>{deviceFleet.offline}</strong>
+                <small>próg 5 minut bez heartbeat</small>
+              </article>
+              <article className="stat-card">
+                <span>Blackout</span>
+                <strong>{deviceFleet.blackout}</strong>
+                <small>{deviceFleet.pending} czeka na approval</small>
+              </article>
+            </div>
+
             <div className="card-grid two-columns">
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Oczekujące na approval</h3>
+                  <span>{pendingDevices.length}</span>
+                </header>
+                {pendingDevices.length ? (
+                  <div className="list-stack">
+                    {pendingDevices.map((device) => (
+                      <button key={device.id} className="list-card interactive device-pending-row" type="button" onClick={() => beginDeviceApproval(device)}>
+                        <div>
+                          <strong>{device.serial}</strong>
+                          <span>
+                            {device.deviceModel} · {device.platform || "android"} · APK {device.appVersion || "brak"}
+                          </span>
+                          <small>{device.playerMessage || "Czeka na approval."}</small>
+                        </div>
+                        <div className="align-right">
+                          <span className="status-pill pending">{device.playerState}</span>
+                          <small>{formatDateTime(device.lastSeenAt)}</small>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Żadne nowe urządzenie nie czeka teraz na approval." />
+                )}
+              </article>
+
               <form
                 className="panel stack-form"
                 onSubmit={(event) => {
@@ -1819,13 +1955,13 @@ function App() {
                   };
 
                   const successText =
-                    pendingDevices.some((device) => device.id === deviceForm.id) || !approvedDevices.some((device) => device.id === deviceForm.id)
+                    deviceFormIsPending || !deviceFormIsApproved
                       ? "Urządzenie zostało zatwierdzone."
                       : "Zapisano zmiany urządzenia.";
 
                   void runMutation(
                     async () => {
-                      if (pendingDevices.some((device) => device.id === deviceForm.id)) {
+                      if (deviceFormIsPending) {
                         await approveDevice(token, {
                           deviceId: deviceForm.id,
                           serial: deviceForm.serial,
@@ -1842,11 +1978,11 @@ function App() {
               >
                 <header className="panel-header">
                   <h3>
-                    {pendingDevices.some((device) => device.id === deviceForm.id)
+                    {deviceFormIsPending
                       ? "Zatwierdź urządzenie"
                       : deviceForm.id
-                        ? "Edytuj urządzenie"
-                        : "Wybierz urządzenie z kolejki"}
+                        ? "Konfiguracja urządzenia"
+                        : "Wybierz urządzenie"}
                   </h3>
                   {deviceForm.id ? (
                     <button className="ghost-button" type="button" onClick={() => setDeviceForm(emptyDeviceForm)}>
@@ -1866,44 +2002,46 @@ function App() {
                     required
                   />
                 </Field>
-                <Field label="Klient" htmlFor="device-client">
-                  <select
-                    id="device-client"
-                    name="device-client"
-                    value={deviceForm.clientId}
-                    onChange={(event) =>
-                      setDeviceForm((current) => ({
-                        ...current,
-                        clientId: event.target.value,
-                        channelId: ""
-                      }))
-                    }
-                    required
-                  >
-                    <option value="">Wybierz klienta</option>
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {client.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Kanał" htmlFor="device-channel">
-                  <select
-                    id="device-channel"
-                    name="device-channel"
-                    value={deviceForm.channelId}
-                    onChange={(event) => setDeviceForm((current) => ({ ...current, channelId: event.target.value }))}
-                    required
-                  >
-                    <option value="">Wybierz kanał</option>
-                    {filteredChannelsForDevice.map((channel) => (
-                      <option key={channel.id} value={channel.id}>
-                        {channel.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                <div className="inline-grid">
+                  <Field label="Klient" htmlFor="device-client">
+                    <select
+                      id="device-client"
+                      name="device-client"
+                      value={deviceForm.clientId}
+                      onChange={(event) =>
+                        setDeviceForm((current) => ({
+                          ...current,
+                          clientId: event.target.value,
+                          channelId: ""
+                        }))
+                      }
+                      required
+                    >
+                      <option value="">Wybierz klienta</option>
+                      {clients.map((client) => (
+                        <option key={client.id} value={client.id}>
+                          {client.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Kanał" htmlFor="device-channel">
+                    <select
+                      id="device-channel"
+                      name="device-channel"
+                      value={deviceForm.channelId}
+                      onChange={(event) => setDeviceForm((current) => ({ ...current, channelId: event.target.value }))}
+                      required
+                    >
+                      <option value="">Wybierz kanał</option>
+                      {filteredChannelsForDevice.map((channel) => (
+                        <option key={channel.id} value={channel.id}>
+                          {channel.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
                 <Field label="Lokalizacja / opis" htmlFor="device-location">
                   <input
                     id="device-location"
@@ -1945,41 +2083,15 @@ function App() {
                   <textarea
                     id="device-notes"
                     name="device-notes"
-                    rows={4}
+                    rows={3}
                     value={deviceForm.notes}
                     onChange={(event) => setDeviceForm((current) => ({ ...current, notes: event.target.value }))}
                   />
                 </Field>
                 <button className="primary-button" type="submit" disabled={submitting || !deviceForm.id}>
-                  {pendingDevices.some((device) => device.id === deviceForm.id) ? "Zatwierdź urządzenie" : "Zapisz zmiany"}
+                  {deviceFormIsPending ? "Zatwierdź urządzenie" : "Zapisz konfigurację"}
                 </button>
               </form>
-
-              <article className="panel">
-                <header className="panel-header">
-                  <h3>Kolejka oczekujących</h3>
-                  <span>{pendingDevices.length}</span>
-                </header>
-                {pendingDevices.length ? (
-                  <div className="list-stack">
-                    {pendingDevices.map((device) => (
-                      <button key={device.id} className="list-card interactive" type="button" onClick={() => beginDeviceApproval(device)}>
-                        <div>
-                          <strong>{device.serial}</strong>
-                          <span>{device.deviceModel}</span>
-                          <small>{device.playerMessage || "Czeka na approval."}</small>
-                        </div>
-                        <div className="align-right">
-                          <span className="status-pill pending">{device.playerState}</span>
-                          <small>{formatDateTime(device.lastSeenAt)}</small>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState text="Żadne nowe urządzenie nie czeka teraz na approval." />
-                )}
-              </article>
             </div>
 
             <article className="panel">
@@ -1988,9 +2100,9 @@ function App() {
                 <span>{approvedDevices.length}</span>
               </header>
               {approvedDevices.length ? (
-                <div className="list-stack">
+                <div className="device-center-grid">
                   {approvedDevices.map((device) => (
-                    <div key={device.id} className="device-card">
+                    <div key={device.id} className={`device-card command-card ${device.desiredDisplayState === "blackout" ? "is-blackout" : ""}`}>
                       <div className="device-card-main">
                         <div>
                           <strong>{device.name}</strong>
@@ -1998,19 +2110,47 @@ function App() {
                             {device.serial} · {device.clientName || "bez klienta"} · {device.channelName || "bez kanału"}
                           </span>
                           <small>
+                            {device.locationLabel ? `${device.locationLabel} · ` : ""}
                             {device.playerMessage || "Brak komunikatu od playera."}
                             {device.activeItemTitle ? ` · aktualnie: ${device.activeItemTitle}` : ""}
                           </small>
                         </div>
                         <div className="device-meta">
-                          <span className={`status-pill ${device.online ? "online" : "offline"}`}>
-                            {device.online ? "online" : "offline"}
+                          <span className={`status-pill ${getDeviceConnection(device)}`}>
+                            {connectionLabel(getDeviceConnection(device))}
                           </span>
+                          {device.desiredDisplayState === "blackout" ? <span className="status-pill blackout">blackout</span> : null}
                           <span className="status-pill neutral">{device.playerState}</span>
-                          <small>APK {device.appVersion || "brak"}</small>
+                        </div>
+                      </div>
+                      <div className="device-detail-grid">
+                        <div>
+                          <span>Heartbeat</span>
+                          <strong>{formatDateTime(device.lastSeenAt)}</strong>
+                        </div>
+                        <div>
+                          <span>Sync</span>
+                          <strong>{formatDateTime(device.lastSyncAt)}</strong>
+                        </div>
+                        <div>
+                          <span>Platforma</span>
+                          <strong>{device.platform || "brak"} · APK {device.appVersion || "brak"}</strong>
+                        </div>
+                        <div>
+                          <span>Volume</span>
+                          <strong>{device.volumePercent}%</strong>
                         </div>
                       </div>
                       <div className="card-actions">
+                        {device.desiredDisplayState === "blackout" ? (
+                          <button className="primary-button" type="button" onClick={() => quickUpdateDevice(device, "wake")} disabled={submitting}>
+                            Wake
+                          </button>
+                        ) : (
+                          <button className="ghost-button" type="button" onClick={() => quickUpdateDevice(device, "blackout")} disabled={submitting}>
+                            Blackout
+                          </button>
+                        )}
                         <button className="ghost-button" type="button" onClick={() => beginDeviceEdit(device)}>
                           Edytuj
                         </button>
@@ -2112,6 +2252,13 @@ function formatDateTime(value: string) {
     dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function connectionLabel(value: ReturnType<typeof getDeviceConnection>) {
+  if (value === "stale") {
+    return "świeży";
+  }
+  return value;
 }
 
 function Field(props: { label: string; htmlFor: string; children: ReactNode }) {
