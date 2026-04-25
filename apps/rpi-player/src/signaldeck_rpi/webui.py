@@ -7,6 +7,8 @@ from typing import Any
 import argparse
 import html
 import json
+import subprocess
+from urllib.parse import parse_qs
 
 from .config import PlayerConfig, load_config
 from .identity import PlayerIdentity, load_or_create_system_identity
@@ -18,6 +20,8 @@ class StatusProvider:
     config: PlayerConfig
     identity: PlayerIdentity
     state_root: Path = Path("/var/lib/signaldeck")
+    config_path: Path = Path("/etc/signaldeck/player.toml")
+    boot_dir: Path = Path("/boot/firmware")
 
     def snapshot(self) -> dict[str, Any]:
         connectors = probe_drm_connectors()
@@ -41,6 +45,8 @@ class StatusProvider:
                 "toleranceMs": self.config.sync.tolerance_ms,
             },
             "outputs": outputs,
+            "setupLock": str(self.boot_dir / "SIGNALDECK_LOCK"),
+            "setupLocked": (self.boot_dir / "SIGNALDECK_LOCK").exists(),
         }
 
     def _manifest_count(self, output: str) -> int:
@@ -76,9 +82,15 @@ class WebUiApp:
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 2rem; color: #111; background: #f7f7f4; }}
     main {{ max-width: 920px; margin: 0 auto; }}
+    section {{ margin: 1.5rem 0; padding: 1rem; background: white; border: 1px solid #ddd; }}
     table {{ width: 100%; border-collapse: collapse; background: white; }}
     th, td {{ padding: .75rem; border-bottom: 1px solid #ddd; text-align: left; }}
     code {{ background: #eee; padding: .15rem .3rem; }}
+    label {{ display: block; margin: .75rem 0 .25rem; font-weight: 650; }}
+    input, select {{ width: min(100%, 36rem); padding: .6rem; font: inherit; }}
+    button {{ margin-top: 1rem; padding: .65rem .9rem; font: inherit; font-weight: 700; cursor: pointer; }}
+    .row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }}
+    .hint {{ color: #555; }}
   </style>
 </head>
 <body>
@@ -91,9 +103,117 @@ class WebUiApp:
       <thead><tr><th>Output</th><th>Serial</th><th>Enabled</th></tr></thead>
       <tbody>{output_rows}</tbody>
     </table>
+    <section>
+      <h2>CMS i synchronizacja</h2>
+      <form method="post" action="/api/config">
+        <label for="server_url">Server URL</label>
+        <input id="server_url" name="server_url" value="{html.escape(status["serverUrl"])}" required>
+        <div class="row">
+          <div>
+            <label for="sync_mode">Sync mode</label>
+            <select id="sync_mode" name="sync_mode">{_options(status["sync"]["mode"], ["independent", "paired_start", "clocked_playlist"])}</select>
+          </div>
+          <div>
+            <label for="sync_policy">Sync policy</label>
+            <select id="sync_policy" name="sync_policy">{_options(status["sync"]["policy"], ["best_effort", "strict"])}</select>
+          </div>
+          <div>
+            <label for="tolerance_ms">Tolerance ms</label>
+            <input id="tolerance_ms" name="tolerance_ms" type="number" min="0" max="5000" value="{html.escape(str(status["sync"]["toleranceMs"]))}">
+          </div>
+        </div>
+        <button type="submit">Save config</button>
+      </form>
+    </section>
+    <section>
+      <h2>Siec</h2>
+      <form method="post" action="/api/wifi">
+        <label for="ssid">Wi-Fi SSID</label>
+        <input id="ssid" name="ssid" autocomplete="off">
+        <label for="password">Wi-Fi password</label>
+        <input id="password" name="password" type="password" autocomplete="new-password">
+        <label for="ipv4_method">IPv4</label>
+        <select id="ipv4_method" name="ipv4_method">
+          <option value="auto">DHCP</option>
+          <option value="manual">Static</option>
+        </select>
+        <div class="row">
+          <div><label for="address">Static address/CIDR</label><input id="address" name="address" placeholder="192.168.1.50/24"></div>
+          <div><label for="gateway">Gateway</label><input id="gateway" name="gateway" placeholder="192.168.1.1"></div>
+          <div><label for="dns">DNS</label><input id="dns" name="dns" placeholder="1.1.1.1 8.8.8.8"></div>
+        </div>
+        <p class="hint">Apply now zapisze Wi-Fi, utworzy {html.escape(status["setupLock"])}, wylaczy hotspot i zrestartuje agenta. To zwykle zerwie polaczenie z ta strona.</p>
+        <button type="submit" name="apply_now" value="0">Save Wi-Fi profile</button>
+        <button type="submit" name="apply_now" value="1">Apply now</button>
+      </form>
+    </section>
+    <section>
+      <h2>Serwis</h2>
+      <form method="post" action="/api/restart-agent"><button type="submit">Restart agent</button></form>
+      <form method="post" action="/api/lock-setup"><button type="submit">Mark setup complete</button></form>
+      <p class="hint">Setup lock: <code>{html.escape(str(status["setupLocked"]))}</code></p>
+    </section>
   </main>
 </body>
 </html>"""
+
+    def save_config(self, fields: dict[str, str]) -> str:
+        config = self.provider.config
+        server_url = fields.get("server_url", config.server_url).strip().rstrip("/") or config.server_url
+        sync_mode = fields.get("sync_mode", config.sync.mode).strip() or config.sync.mode
+        sync_policy = fields.get("sync_policy", config.sync.policy).strip() or config.sync.policy
+        tolerance_ms = _int(fields.get("tolerance_ms"), config.sync.tolerance_ms)
+        payload = _render_config_toml(config, server_url, sync_mode, sync_policy, tolerance_ms)
+        self.provider.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.provider.config_path.write_text(payload, encoding="utf-8")
+        self.provider.config_path.chmod(0o640)
+        self.provider.config = load_config(self.provider.config_path)
+        return "Config saved"
+
+    def save_wifi(self, fields: dict[str, str]) -> str:
+        ssid = fields.get("ssid", "").strip()
+        if not ssid:
+            raise ValueError("Wi-Fi SSID is required")
+        password = fields.get("password", "")
+        method = fields.get("ipv4_method", "auto").strip() or "auto"
+        commands = [
+            ["nmcli", "connection", "delete", "SignalDeck-WiFi"],
+            ["nmcli", "connection", "add", "type", "wifi", "ifname", "wlan0", "con-name", "SignalDeck-WiFi", "ssid", ssid],
+            ["nmcli", "connection", "modify", "SignalDeck-WiFi", "connection.autoconnect", "yes"],
+        ]
+        if password:
+            commands.append(["nmcli", "connection", "modify", "SignalDeck-WiFi", "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
+        if method == "manual":
+            address = fields.get("address", "").strip()
+            gateway = fields.get("gateway", "").strip()
+            dns = fields.get("dns", "").strip()
+            if not address or not gateway:
+                raise ValueError("Static IPv4 requires address and gateway")
+            commands.append(["nmcli", "connection", "modify", "SignalDeck-WiFi", "ipv4.method", "manual", "ipv4.addresses", address, "ipv4.gateway", gateway])
+            if dns:
+                commands.append(["nmcli", "connection", "modify", "SignalDeck-WiFi", "ipv4.dns", dns])
+        else:
+            commands.append(["nmcli", "connection", "modify", "SignalDeck-WiFi", "ipv4.method", "auto"])
+
+        for command in commands:
+            _run(command, allow_failure=command[:3] == ["nmcli", "connection", "delete"])
+
+        if fields.get("apply_now") == "1":
+            self.mark_setup_complete()
+            _run(["systemctl", "restart", "signaldeck-agent.service"], allow_failure=True)
+            _run(["nmcli", "connection", "down", "SignalDeck-Setup"], allow_failure=True)
+            _run(["nmcli", "connection", "up", "SignalDeck-WiFi"], allow_failure=True)
+            return "Wi-Fi saved and applied"
+        return "Wi-Fi profile saved"
+
+    def restart_agent(self) -> str:
+        _run(["systemctl", "restart", "signaldeck-agent.service"])
+        return "Agent restarted"
+
+    def mark_setup_complete(self) -> str:
+        self.provider.boot_dir.mkdir(parents=True, exist_ok=True)
+        (self.provider.boot_dir / "SIGNALDECK_LOCK").write_text("configured\n", encoding="utf-8")
+        return "Setup marked complete"
 
 
 def make_handler(app: WebUiApp):
@@ -115,6 +235,34 @@ def make_handler(app: WebUiApp):
             self.end_headers()
             self.wfile.write(payload)
 
+        def do_POST(self):
+            try:
+                fields = _read_form(self)
+                if self.path == "/api/config":
+                    message = app.save_config(fields)
+                elif self.path == "/api/wifi":
+                    message = app.save_wifi(fields)
+                elif self.path == "/api/restart-agent":
+                    message = app.restart_agent()
+                elif self.path == "/api/lock-setup":
+                    message = app.mark_setup_complete()
+                else:
+                    self.send_error(404)
+                    return
+                self._redirect(message)
+            except Exception as error:
+                self.send_response(400)
+                payload = f"Request failed: {html.escape(str(error))}".encode("utf-8")
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        def _redirect(self, message: str):
+            self.send_response(303)
+            self.send_header("Location", f"/?message={html.escape(message)}")
+            self.end_headers()
+
         def log_message(self, format, *args):
             return
 
@@ -131,10 +279,11 @@ def create_provider(
     config_path: str | Path = "/etc/signaldeck/player.toml",
     identity_path: str | Path = "/var/lib/signaldeck/identity.json",
     state_root: str | Path = "/var/lib/signaldeck",
+    boot_dir: str | Path = "/boot/firmware",
 ) -> StatusProvider:
     config = load_config(config_path)
     identity = load_or_create_system_identity(identity_path, config.outputs)
-    return StatusProvider(config, identity, Path(state_root))
+    return StatusProvider(config, identity, Path(state_root), Path(config_path), Path(boot_dir))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -144,5 +293,55 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", default="/etc/signaldeck/player.toml")
     parser.add_argument("--identity", default="/var/lib/signaldeck/identity.json")
     parser.add_argument("--state-root", default="/var/lib/signaldeck")
+    parser.add_argument("--boot-dir", default="/boot/firmware")
     args = parser.parse_args(argv)
-    run_server(args.host, args.port, create_provider(args.config, args.identity, args.state_root))
+    run_server(args.host, args.port, create_provider(args.config, args.identity, args.state_root, args.boot_dir))
+
+
+def _read_form(handler: BaseHTTPRequestHandler) -> dict[str, str]:
+    length = int(handler.headers.get("content-length", "0"))
+    raw = handler.rfile.read(length).decode("utf-8")
+    return {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
+
+
+def _options(selected: str, values: list[str]) -> str:
+    return "".join(
+        f'<option value="{html.escape(value)}"{" selected" if value == selected else ""}>{html.escape(value)}</option>'
+        for value in values
+    )
+
+
+def _render_config_toml(config: PlayerConfig, server_url: str, sync_mode: str, sync_policy: str, tolerance_ms: int) -> str:
+    outputs = "\n".join(
+        f'\n[[outputs]]\nname = "{output.name}"\nserial_suffix = "{output.serial_suffix}"\nenabled = {"true" if output.enabled else "false"}\n'
+        for output in config.outputs
+    )
+    return f'''server_url = "{server_url}"
+device_model = "{config.device_model}"
+player_type = "{config.player_type}"
+app_version = "{config.app_version}"
+cache_limit_mb = {config.cache_limit_mb}
+heartbeat_interval_seconds = {config.heartbeat_interval_seconds}
+
+[sync]
+mode = "{sync_mode}"
+group = "{config.sync.group}"
+policy = "{sync_policy}"
+tolerance_ms = {max(tolerance_ms, 0)}
+group_blackout = {"true" if config.sync.group_blackout else "false"}
+{outputs}'''
+
+
+def _int(value: str | None, fallback: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _run(command: list[str], allow_failure: bool = False) -> subprocess.CompletedProcess:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 and not allow_failure:
+        detail = (result.stderr or result.stdout or "command failed").strip()
+        raise RuntimeError(f"{' '.join(command)}: {detail}")
+    return result

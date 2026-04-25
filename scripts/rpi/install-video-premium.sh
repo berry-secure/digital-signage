@@ -134,12 +134,18 @@ name = "HDMI-A-2"
 serial_suffix = "B"
 enabled = true
 TOML
-    chmod 600 "${CONFIG_DIR}/player.toml"
   fi
 
   write_secret_once "${CONFIG_DIR}/webui.secret" 32
   write_secret_once "${CONFIG_DIR}/hotspot.secret" 16
   chown -R root:"${APP_USER}" "${CONFIG_DIR}"
+  chmod 640 "${CONFIG_DIR}/player.toml" "${CONFIG_DIR}/webui.secret" "${CONFIG_DIR}/hotspot.secret"
+  if [[ -d "${BOOT_DIR}" ]]; then
+    {
+      printf 'Signal Deck hotspot password:\n'
+      cat "${CONFIG_DIR}/hotspot.secret"
+    } >"${BOOT_DIR}/SIGNALDECK_HOTSPOT.txt" || true
+  fi
 }
 
 write_secret_once() {
