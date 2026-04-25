@@ -1,6 +1,6 @@
 export type DeviceApprovalStatus = "pending" | "approved";
 export type PlayerState = "waiting" | "idle" | "playing";
-export type MediaKind = "video" | "image";
+export type MediaKind = "video" | "image" | "audio";
 export type DeviceCommandType =
   | "reboot_os"
   | "restart_app"
@@ -31,6 +31,19 @@ export interface PlaybackEntry {
   durationSeconds: number;
   volumePercent: number;
   hasAudio: boolean;
+  sourceType?: "playlist" | "event";
+  eventId?: string;
+}
+
+export interface PlaybackEvent {
+  id: string;
+  name: string;
+  eventType: "audio" | "visual";
+  triggerMode: "items" | "minutes";
+  intervalItems: number;
+  intervalMinutes: number;
+  priority: number;
+  media: PlaybackEntry;
 }
 
 export interface PlaybackPayload {

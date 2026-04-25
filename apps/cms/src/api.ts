@@ -292,6 +292,58 @@ export async function deleteSchedule(token: string, scheduleId: string) {
   });
 }
 
+export async function createPlaybackEvent(
+  token: string,
+  payload: {
+    clientId: string;
+    channelId: string;
+    mediaId: string;
+    name: string;
+    eventType: string;
+    triggerMode: string;
+    intervalItems: number;
+    intervalMinutes: number;
+    priority: number;
+    isActive: boolean;
+  }
+) {
+  return requestJson<{ playbackEvent: BootstrapPayload["playbackEvents"][number] }>("/api/playback-events", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updatePlaybackEvent(
+  token: string,
+  eventId: string,
+  payload: {
+    clientId: string;
+    channelId: string;
+    mediaId: string;
+    name: string;
+    eventType: string;
+    triggerMode: string;
+    intervalItems: number;
+    intervalMinutes: number;
+    priority: number;
+    isActive: boolean;
+  }
+) {
+  return requestJson<{ playbackEvent: BootstrapPayload["playbackEvents"][number] }>(`/api/playback-events/${eventId}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deletePlaybackEvent(token: string, eventId: string) {
+  return requestJson<{ ok: true }>(`/api/playback-events/${eventId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
 export async function approveDevice(
   token: string,
   payload: {

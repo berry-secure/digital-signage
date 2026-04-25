@@ -25,7 +25,10 @@ export type DeviceCommandType =
   | "upload_logs"
   | "rotate_secret";
 export type DeviceCommandStatus = "pending" | "sent" | "acked" | "failed";
-export type MediaKind = "video" | "image";
+export type MediaKind = "video" | "image" | "audio";
+export type PlaybackEventType = "audio" | "visual";
+export type PlaybackEventTriggerMode = "items" | "minutes";
+export type DeviceLogSeverity = "info" | "warn" | "error";
 
 export interface UserRecord {
   id: string;
@@ -112,6 +115,27 @@ export interface ScheduleRecord {
   updatedAt: string;
 }
 
+export interface PlaybackEventRecord {
+  id: string;
+  clientId: string;
+  channelId: string;
+  mediaId: string;
+  name: string;
+  eventType: PlaybackEventType;
+  triggerMode: PlaybackEventTriggerMode;
+  intervalItems: number;
+  intervalMinutes: number;
+  priority: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  media: MediaRecord | null;
+  clientName: string;
+  channelName: string;
+  mediaTitle: string;
+  mediaKind: MediaKind | "";
+}
+
 export interface DeviceRecord {
   id: string;
   serial: string;
@@ -139,6 +163,25 @@ export interface DeviceRecord {
   clientName: string;
   channelName: string;
   online: boolean;
+}
+
+export interface DeviceLogRecord {
+  id: string;
+  deviceId: string;
+  severity: DeviceLogSeverity;
+  component: string;
+  message: string;
+  stack: string;
+  context: Record<string, unknown>;
+  appVersion: string;
+  osVersion: string;
+  networkStatus: string;
+  createdAt: string;
+  updatedAt: string;
+  deviceName: string;
+  deviceSerial: string;
+  clientId: string;
+  clientName: string;
 }
 
 export interface DeviceCommandRecord {
@@ -174,4 +217,6 @@ export interface BootstrapPayload {
   schedules: ScheduleRecord[];
   devices: DeviceRecord[];
   deviceCommands: DeviceCommandRecord[];
+  playbackEvents: PlaybackEventRecord[];
+  deviceLogs: DeviceLogRecord[];
 }
