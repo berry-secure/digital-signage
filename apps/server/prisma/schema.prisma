@@ -16,6 +16,7 @@ enum UserRole {
 enum MediaKind {
   video
   image
+  audio
 }
 
 enum MediaStatus {
@@ -77,6 +78,7 @@ model Client {
   playlists  Playlist[]
   schedules  Schedule[]
   devices    Device[]
+  events     PlaybackEvent[]
 }
 
 model UserClient {
@@ -104,6 +106,7 @@ model Channel {
   playlists   Playlist[]
   schedules   Schedule[]
   devices     Device[]
+  events      PlaybackEvent[]
 
   @@unique([clientId, slug])
   @@index([clientId])
@@ -127,6 +130,7 @@ model Media {
   updatedAt       DateTime       @updatedAt
   client          Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
   playlistItems   PlaylistItem[]
+  playbackEvents  PlaybackEvent[]
 
   @@index([clientId])
   @@index([status])
@@ -219,6 +223,7 @@ model Device {
   client              Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull)
   channel             Channel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
   commands            DeviceCommand[]
+  logs                DeviceLog[]
 
   @@index([approvalStatus])
   @@index([clientId])
@@ -245,6 +250,51 @@ model DeviceCommand {
   @@index([deviceId, status])
   @@index([requestedByUserId])
   @@index([updatedAt])
+}
+
+model PlaybackEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  clientId        String   @db.Uuid
+  channelId       String?  @db.Uuid
+  mediaId         String   @db.Uuid
+  name            String
+  eventType       String   @default("visual")
+  triggerMode     String   @default("items")
+  intervalItems   Int      @default(1)
+  intervalMinutes Int      @default(0)
+  priority        Int      @default(100)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel         Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  media           Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([channelId])
+  @@index([mediaId])
+  @@index([isActive, priority])
+}
+
+model DeviceLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  deviceId      String   @db.Uuid
+  severity      String
+  component     String
+  message       String
+  stack         String   @default("")
+  context       Json?
+  appVersion    String   @default("")
+  osVersion     String   @default("")
+  networkStatus String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, createdAt])
+  @@index([severity])
+  @@index([component])
+  @@index([createdAt])
 }
 
 model Session {

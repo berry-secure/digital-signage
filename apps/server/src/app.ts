@@ -78,6 +78,10 @@ const deviceCommandTypes = new Set([
   "rotate_secret"
 ]);
 const deviceCommandStatuses = new Set(["pending", "sent", "acked", "failed"]);
+const mediaKinds = new Set(["video", "image", "audio"]);
+const playbackEventTypes = new Set(["audio", "visual"]);
+const playbackEventTriggerModes = new Set(["items", "minutes"]);
+const deviceLogSeverities = new Set(["info", "warn", "error"]);
 
 export function resolveServerConfig(config: ServerConfig = {}) {
   const env = config.env || process.env;
@@ -369,6 +373,7 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
   );
   database.media = database.media.filter((entry) => entry.clientId !== clientId);
   database.deviceCommands = database.deviceCommands.filter((entry) => !resetDeviceIds.includes(entry.deviceId));
+  database.playbackEvents = database.playbackEvents.filter((entry) => entry.clientId !== clientId);
 
   await Promise.all(mediaToDelete.map((entry) => removeUploadFile(entry.fileName)));
   await persistDatabase();
@@ -437,6 +442,9 @@ app.delete("/api/channels/:id", requireAuth, async (req, res) => {
     entry.channelId === channelId ? { ...entry, channelId: "", updatedAt: nowIso() } : entry
   );
   database.schedules = database.schedules.filter((entry) => entry.channelId !== channelId);
+  database.playbackEvents = database.playbackEvents.map((entry) =>
+    entry.channelId === channelId ? { ...entry, channelId: "", updatedAt: nowIso() } : entry
+  );
   database.devices = database.devices.map((entry) =>
     entry.channelId === channelId
       ? {
@@ -466,7 +474,7 @@ app.post("/api/media", requireAuth, upload.single("file"), async (req, res) => {
     id: randomUUID(),
     clientId,
     title: String(req.body?.title || req.file.originalname || "Nowe media").trim(),
-    kind: req.body?.kind === "image" ? "image" : "video",
+    kind: normalizeMediaKind(req.body?.kind),
     fileName: req.file.filename,
     originalName: req.file.originalname,
     mimeType: req.file.mimetype,
@@ -492,7 +500,47 @@ app.delete("/api/media/:id", requireAuth, async (req, res) => {
 
   database.media = database.media.filter((entry) => entry.id !== media.id);
   database.playlistItems = database.playlistItems.filter((entry) => entry.mediaId !== media.id);
+  database.playbackEvents = database.playbackEvents.filter((entry) => entry.mediaId !== media.id);
   await removeUploadFile(media.fileName);
+  await persistDatabase();
+  res.json({ ok: true });
+});
+
+app.post("/api/playback-events", requireAuth, async (req, res) => {
+  const event = buildPlaybackEventRecord(req.body);
+  const validationError = validatePlaybackEvent(event);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
+    return;
+  }
+
+  database.playbackEvents.unshift(event);
+  await persistDatabase();
+  res.status(201).json({ playbackEvent: presentPlaybackEvent(event, getRequestBaseUrl(req)) });
+});
+
+app.put("/api/playback-events/:id", requireAuth, async (req, res) => {
+  const event = findById(database.playbackEvents, req.params.id);
+  if (!event) {
+    res.status(404).json({ message: "Nie znaleziono eventu emisji." });
+    return;
+  }
+
+  const nextEvent = buildPlaybackEventRecord(req.body, event);
+  const validationError = validatePlaybackEvent(nextEvent);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
+    return;
+  }
+
+  Object.assign(event, nextEvent);
+  touch(event);
+  await persistDatabase();
+  res.json({ playbackEvent: presentPlaybackEvent(event, getRequestBaseUrl(req)) });
+});
+
+app.delete("/api/playback-events/:id", requireAuth, async (req, res) => {
+  database.playbackEvents = database.playbackEvents.filter((entry) => entry.id !== req.params.id);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -745,6 +793,7 @@ app.post("/api/devices/:id/reset", requireAuth, async (req, res) => {
 app.delete("/api/devices/:id", requireAuth, async (req, res) => {
   database.devices = database.devices.filter((entry) => entry.id !== req.params.id);
   database.deviceCommands = database.deviceCommands.filter((entry) => entry.deviceId !== req.params.id);
+  database.deviceLogs = database.deviceLogs.filter((entry) => entry.deviceId !== req.params.id);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -820,6 +869,44 @@ app.post("/api/player/session", async (req, res) => {
     commands: commands.map(presentPlayerCommand),
     serverTime: nowIso()
   });
+});
+
+app.post("/api/player/logs", async (req, res) => {
+  const serial = normalizeSerial(String(req.body?.serial || ""));
+  const secret = String(req.body?.secret || "").trim();
+  const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
+
+  if (!device) {
+    res.status(404).json({ message: "Nie znaleziono urządzenia dla logu playera." });
+    return;
+  }
+
+  const message = String(req.body?.message || "").trim();
+  if (!message) {
+    res.status(400).json({ message: "Log playera wymaga wiadomości." });
+    return;
+  }
+
+  const deviceLog = {
+    id: randomUUID(),
+    deviceId: device.id,
+    severity: normalizeDeviceLogSeverity(req.body?.severity),
+    component: String(req.body?.component || "player").trim() || "player",
+    message,
+    stack: String(req.body?.stack || "").trim(),
+    context: isPlainObject(req.body?.context) ? req.body.context : {},
+    appVersion: String(req.body?.appVersion || device.appVersion || "").trim(),
+    osVersion: String(req.body?.osVersion || "").trim(),
+    networkStatus: String(req.body?.networkStatus || "").trim(),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  database.deviceLogs.unshift(deviceLog);
+  device.lastSeenAt = nowIso();
+  touch(device);
+  await persistDatabase();
+  res.status(201).json({ deviceLog: presentDeviceLog(deviceLog) });
 });
 
 app.post("/api/player/commands/:id/ack", async (req, res) => {
@@ -955,7 +1042,11 @@ function buildBootstrapPayload(req) {
     playlists: buildPlaylistViews(),
     schedules: [...database.schedules].sort(sortByPriorityDesc),
     devices: [...database.devices].sort(sortDevices).map((entry) => presentDevice(entry)),
-    deviceCommands: [...database.deviceCommands].sort(sortByUpdatedDesc).slice(0, 250).map((entry) => presentDeviceCommand(entry))
+    deviceCommands: [...database.deviceCommands].sort(sortByUpdatedDesc).slice(0, 250).map((entry) => presentDeviceCommand(entry)),
+    playbackEvents: [...database.playbackEvents]
+      .sort(sortPlaybackEvents)
+      .map((entry) => presentPlaybackEvent(entry, baseUrl)),
+    deviceLogs: [...database.deviceLogs].sort(sortByCreatedDesc).slice(0, 250).map((entry) => presentDeviceLog(entry))
   };
 }
 
@@ -1002,7 +1093,7 @@ function buildPlaybackPayload(device, req) {
 
   return {
     mode: "playlist",
-    queue,
+    queue: buildPlaybackQueueWithEvents(queue, buildActivePlaybackEvents(device, baseUrl)),
     label: activeSchedule?.label || resolvedPlaylist.name,
     reason: activeSchedule
       ? `Aktywny harmonogram: ${activeSchedule.label}`
@@ -1041,9 +1132,99 @@ function buildPlaylistQueue(playlistId, baseUrl) {
         url,
         durationSeconds: Number(media.durationSeconds || 10) || 10,
         volumePercent: clampNumber(Number(entry.volumePercent || 100), 0, 100),
-        hasAudio: Boolean(media.hasAudio)
+        hasAudio: Boolean(media.hasAudio || media.kind === "audio"),
+        sourceType: "playlist"
       }));
     });
+}
+
+function buildActivePlaybackEvents(device, baseUrl) {
+  return database.playbackEvents
+    .filter(
+      (entry) =>
+        entry.isActive !== false &&
+        entry.clientId === device.clientId &&
+        (!entry.channelId || entry.channelId === device.channelId)
+    )
+    .sort(sortPlaybackEvents)
+    .flatMap((entry) => {
+      const media = findById(database.media, entry.mediaId);
+      if (!media || media.status !== "published") {
+        return [];
+      }
+
+      return [
+        {
+          ...entry,
+          media: {
+            id: `media:${media.id}`,
+            playlistId: "",
+            title: media.title,
+            kind: media.kind,
+            url: `${baseUrl}/uploads/${media.fileName}`,
+            durationSeconds: Number(media.durationSeconds || 10) || 10,
+            volumePercent: clampNumber(Number(device.volumePercent || 80), 0, 100),
+            hasAudio: Boolean(media.hasAudio || media.kind === "audio"),
+            sourceType: "event"
+          }
+        }
+      ];
+    });
+}
+
+function buildPlaybackQueueWithEvents(queue, events) {
+  if (!events.length) {
+    return queue.map((entry) => ({ ...entry, sourceType: entry.sourceType || "playlist" }));
+  }
+
+  const result = [];
+  const occurrences = new Map();
+  const nextMinuteThreshold = new Map();
+  let elapsedSeconds = 0;
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const baseEntry = { ...queue[index], sourceType: queue[index].sourceType || "playlist" };
+    result.push(baseEntry);
+    elapsedSeconds += Math.max(Number(baseEntry.durationSeconds || 0), 0);
+
+    for (const event of events) {
+      if (!shouldInsertPlaybackEvent(event, index + 1, elapsedSeconds, nextMinuteThreshold)) {
+        continue;
+      }
+
+      const occurrence = (occurrences.get(event.id) || 0) + 1;
+      occurrences.set(event.id, occurrence);
+      result.push({
+        ...event.media,
+        id: `event:${event.id}:${occurrence}`,
+        title: event.name || event.media.title,
+        sourceType: "event",
+        eventId: event.id
+      });
+    }
+  }
+
+  return result;
+}
+
+function shouldInsertPlaybackEvent(event, playedItems, elapsedSeconds, nextMinuteThreshold) {
+  if (event.triggerMode === "items") {
+    const intervalItems = Math.max(Number(event.intervalItems || 0), 0);
+    return intervalItems > 0 && playedItems % intervalItems === 0;
+  }
+
+  const intervalSeconds = Math.max(Number(event.intervalMinutes || 0), 0) * 60;
+  if (!intervalSeconds) {
+    return false;
+  }
+
+  const nextThreshold = nextMinuteThreshold.get(event.id) || intervalSeconds;
+  if (elapsedSeconds < nextThreshold) {
+    return false;
+  }
+
+  nextMinuteThreshold.set(event.id, nextThreshold + intervalSeconds);
+  return true;
 }
 
 function buildPlaylistViews() {
@@ -1087,6 +1268,42 @@ function presentDeviceCommand(command) {
     ackedAt: command.ackedAt || "",
     deviceName: device?.name || "",
     deviceSerial: device?.serial || ""
+  };
+}
+
+function presentPlaybackEvent(event, baseUrl) {
+  const client = findById(database.clients, event.clientId);
+  const channel = event.channelId ? findById(database.channels, event.channelId) : null;
+  const media = findById(database.media, event.mediaId);
+
+  return {
+    ...event,
+    eventType: normalizePlaybackEventType(event.eventType),
+    triggerMode: normalizePlaybackEventTriggerMode(event.triggerMode),
+    channelId: event.channelId || "",
+    media: media ? enrichMedia(media, baseUrl) : null,
+    clientName: client?.name || "",
+    channelName: channel?.name || "",
+    mediaTitle: media?.title || "",
+    mediaKind: media?.kind || ""
+  };
+}
+
+function presentDeviceLog(log) {
+  const device = findById(database.devices, log.deviceId);
+  const client = device?.clientId ? findById(database.clients, device.clientId) : null;
+  return {
+    ...log,
+    severity: normalizeDeviceLogSeverity(log.severity),
+    stack: log.stack || "",
+    context: isPlainObject(log.context) ? log.context : {},
+    appVersion: log.appVersion || "",
+    osVersion: log.osVersion || "",
+    networkStatus: log.networkStatus || "",
+    deviceName: device?.name || "",
+    deviceSerial: device?.serial || "",
+    clientId: device?.clientId || "",
+    clientName: client?.name || ""
   };
 }
 
@@ -1135,6 +1352,56 @@ function buildScheduleRecord(body, current = null) {
     createdAt: current?.createdAt || nowIso(),
     updatedAt: nowIso()
   };
+}
+
+function buildPlaybackEventRecord(body, current = null) {
+  const triggerMode = normalizePlaybackEventTriggerMode(body?.triggerMode || current?.triggerMode);
+  return {
+    id: current?.id || randomUUID(),
+    clientId: String(body?.clientId || current?.clientId || "").trim(),
+    channelId: String(body?.channelId ?? current?.channelId ?? "").trim(),
+    mediaId: String(body?.mediaId || current?.mediaId || "").trim(),
+    name: String(body?.name || current?.name || "").trim(),
+    eventType: normalizePlaybackEventType(body?.eventType || current?.eventType),
+    triggerMode,
+    intervalItems:
+      triggerMode === "items"
+        ? clampNumber(Number(body?.intervalItems ?? current?.intervalItems ?? 1), 1, 10_000)
+        : clampNumber(Number(body?.intervalItems ?? current?.intervalItems ?? 0), 0, 10_000),
+    intervalMinutes:
+      triggerMode === "minutes"
+        ? clampNumber(Number(body?.intervalMinutes ?? current?.intervalMinutes ?? 1), 1, 10_000)
+        : clampNumber(Number(body?.intervalMinutes ?? current?.intervalMinutes ?? 0), 0, 10_000),
+    priority: clampNumber(Number(body?.priority ?? current?.priority ?? 100), 0, 10_000),
+    isActive: body?.isActive ?? current?.isActive ?? true,
+    createdAt: current?.createdAt || nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+function validatePlaybackEvent(event) {
+  const client = findById(database.clients, event.clientId);
+  if (!client) {
+    return "Event wymaga poprawnego klienta.";
+  }
+
+  const media = findById(database.media, event.mediaId);
+  if (!media || media.clientId !== event.clientId || media.status !== "published") {
+    return "Event wymaga opublikowanego media tego samego klienta.";
+  }
+
+  if (event.channelId) {
+    const channel = findById(database.channels, event.channelId);
+    if (!channel || channel.clientId !== event.clientId) {
+      return "Kanał eventu musi należeć do tego samego klienta.";
+    }
+  }
+
+  if (!event.name) {
+    return "Event wymaga nazwy.";
+  }
+
+  return "";
 }
 
 function matchesScheduleNow(schedule) {
@@ -1190,8 +1457,22 @@ function sortByUpdatedDesc(left, right) {
   return new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime();
 }
 
+function sortByCreatedDesc(left, right) {
+  return new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime();
+}
+
 function sortByPriorityDesc(left, right) {
   return Number(right.priority || 0) - Number(left.priority || 0);
+}
+
+function sortPlaybackEvents(left, right) {
+  return (
+    Number(left.priority || 100) - Number(right.priority || 100) ||
+    String(left.name || "").localeCompare(String(right.name || ""), "pl", {
+      sensitivity: "base",
+      numeric: true
+    })
+  );
 }
 
 function sortDevices(left, right) {
@@ -1246,6 +1527,26 @@ function normalizeDeviceCommandType(value) {
 function normalizeDeviceCommandStatus(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return deviceCommandStatuses.has(normalized) ? normalized : "pending";
+}
+
+function normalizeMediaKind(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return mediaKinds.has(normalized) ? normalized : "video";
+}
+
+function normalizePlaybackEventType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return playbackEventTypes.has(normalized) ? normalized : "visual";
+}
+
+function normalizePlaybackEventTriggerMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return playbackEventTriggerModes.has(normalized) ? normalized : "items";
+}
+
+function normalizeDeviceLogSeverity(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return deviceLogSeverities.has(normalized) ? normalized : "info";
 }
 
 function buildDeviceCommandPayload(type, payload) {
@@ -1362,7 +1663,9 @@ async function loadDatabase() {
       playlistItems: Array.isArray(parsed.playlistItems) ? parsed.playlistItems : [],
       schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
       devices: Array.isArray(parsed.devices) ? parsed.devices : [],
-      deviceCommands: Array.isArray(parsed.deviceCommands) ? parsed.deviceCommands : []
+      deviceCommands: Array.isArray(parsed.deviceCommands) ? parsed.deviceCommands : [],
+      playbackEvents: Array.isArray(parsed.playbackEvents) ? parsed.playbackEvents : [],
+      deviceLogs: Array.isArray(parsed.deviceLogs) ? parsed.deviceLogs : []
     };
   } catch {
     const initial = {
@@ -1374,7 +1677,9 @@ async function loadDatabase() {
       playlistItems: [],
       schedules: [],
       devices: [],
-      deviceCommands: []
+      deviceCommands: [],
+      playbackEvents: [],
+      deviceLogs: []
     };
     await fs.writeFile(databasePath, JSON.stringify(initial, null, 2));
     return initial;

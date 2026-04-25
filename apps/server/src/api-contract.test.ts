@@ -250,7 +250,190 @@ describe("MVP API contract", () => {
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
+
+  it("records device logs and interleaves playback events into player queues", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-events-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "events-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Events Owner",
+      publicBaseUrl: "https://cms.example.test"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "events-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Events Client" });
+    const channel = await request(isolatedApp)
+      .post("/api/channels")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Main Channel" });
+
+    const playlistMedia = await uploadTestMedia(isolatedApp, ownerToken, {
+      clientId: client.body.client.id,
+      title: "Base Clip",
+      kind: "video",
+      fileName: "base.mp4",
+      mimeType: "video/mp4",
+      durationSeconds: 30
+    });
+    const visualEventMedia = await uploadTestMedia(isolatedApp, ownerToken, {
+      clientId: client.body.client.id,
+      title: "Promo Splash",
+      kind: "image",
+      fileName: "promo.png",
+      mimeType: "image/png",
+      durationSeconds: 8
+    });
+
+    const playlist = await request(isolatedApp)
+      .post("/api/playlists")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        name: "Main Playlist",
+        isActive: true,
+        notes: ""
+      });
+
+    await request(isolatedApp)
+      .post(`/api/playlists/${playlist.body.playlist.id}/items`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        mediaId: playlistMedia.body.media.id,
+        sortOrder: 10,
+        loopCount: 2,
+        volumePercent: 80
+      });
+
+    const playbackEvent = await request(isolatedApp)
+      .post("/api/playback-events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        mediaId: visualEventMedia.body.media.id,
+        name: "Promo event",
+        eventType: "visual",
+        triggerMode: "items",
+        intervalItems: 1,
+        intervalMinutes: 0,
+        priority: 10,
+        isActive: true
+      });
+
+    assert.equal(playbackEvent.status, 201);
+    assert.equal(playbackEvent.body.playbackEvent.eventType, "visual");
+
+    const playerSession = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKEVENT001",
+        secret: "event-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "waiting"
+      });
+
+    const approved = await request(isolatedApp)
+      .post("/api/devices/approve")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        deviceId: playerSession.body.device.id,
+        serial: "MKEVENT001",
+        name: "Event Screen",
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        locationLabel: "Lobby",
+        notes: "",
+        playerType: "video_standard",
+        desiredDisplayState: "active",
+        volumePercent: 80
+      });
+
+    const logged = await request(isolatedApp)
+      .post("/api/player/logs")
+      .send({
+        serial: "MKEVENT001",
+        secret: "event-secret",
+        severity: "error",
+        component: "playback",
+        message: "Media failed to start",
+        stack: "Error: decode failed",
+        context: { mediaId: playlistMedia.body.media.id },
+        appVersion: "1.0.1",
+        osVersion: "Android 14",
+        networkStatus: "wifi"
+      });
+
+    assert.equal(logged.status, 201);
+    assert.equal(logged.body.deviceLog.severity, "error");
+    assert.equal(logged.body.deviceLog.deviceName, "Event Screen");
+
+    const playback = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKEVENT001",
+        secret: "event-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "idle"
+      });
+
+    assert.equal(playback.status, 200);
+    assert.equal(playback.body.playback.queue.length, 4);
+    assert.deepEqual(
+      playback.body.playback.queue.map((entry) => entry.sourceType),
+      ["playlist", "event", "playlist", "event"]
+    );
+    assert.equal(playback.body.playback.queue[1].eventId, playbackEvent.body.playbackEvent.id);
+
+    const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
+    assert.equal(bootstrap.body.playbackEvents.length, 1);
+    assert.equal(bootstrap.body.deviceLogs.length, 1);
+    assert.equal(bootstrap.body.deviceLogs[0].component, "playback");
+    assert.equal(bootstrap.body.deviceLogs[0].clientName, "Events Client");
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
 });
+
+function uploadTestMedia(
+  app: Awaited<ReturnType<typeof createApp>>,
+  token: string,
+  media: {
+    clientId: string;
+    title: string;
+    kind: "video" | "image" | "audio";
+    fileName: string;
+    mimeType: string;
+    durationSeconds: number;
+  }
+) {
+  return request(app)
+    .post("/api/media")
+    .set("Authorization", `Bearer ${token}`)
+    .field("clientId", media.clientId)
+    .field("title", media.title)
+    .field("kind", media.kind)
+    .field("durationSeconds", String(media.durationSeconds))
+    .field("hasAudio", String(media.kind !== "image"))
+    .field("status", "published")
+    .field("tags", "")
+    .attach("file", Buffer.from(`${media.title} fixture`), {
+      filename: media.fileName,
+      contentType: media.mimeType
+    });
+}
 
 function createFakePrisma(calls: string[]) {
   const tables: Record<string, any[]> = {
@@ -262,7 +445,9 @@ function createFakePrisma(calls: string[]) {
     playlistItem: [],
     schedule: [],
     device: [],
-    deviceCommand: []
+    deviceCommand: [],
+    playbackEvent: [],
+    deviceLog: []
   };
 
   const model = (name: string) => ({
@@ -291,6 +476,8 @@ function createFakePrisma(calls: string[]) {
     schedule: model("schedule"),
     device: model("device"),
     deviceCommand: model("deviceCommand"),
+    playbackEvent: model("playbackEvent"),
+    deviceLog: model("deviceLog"),
     session: model("session"),
     auditLog: model("auditLog"),
     async $transaction(callback: (tx: unknown) => Promise<void>) {

@@ -61,6 +61,25 @@ button {
   background: #000;
 }
 
+.audio-event-stage {
+  width: min(100% - 2rem, 42rem);
+  display: grid;
+  gap: 0.45rem;
+  place-items: center;
+  padding: 1.4rem 1.6rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 17, 29, 0.82);
+  text-align: center;
+}
+
+.audio-event-stage strong {
+  display: block;
+  max-width: 100%;
+  font-size: clamp(1.25rem, 3vw, 2rem);
+  overflow-wrap: anywhere;
+}
+
 .hero-stage {
   display: grid;
   place-items: center;

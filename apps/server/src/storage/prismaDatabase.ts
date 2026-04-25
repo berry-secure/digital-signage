@@ -11,6 +11,8 @@ type DatabaseShape = {
   schedules: any[];
   devices: any[];
   deviceCommands: any[];
+  playbackEvents: any[];
+  deviceLogs: any[];
 };
 
 type AdminOptions = {
@@ -35,7 +37,9 @@ export function createEmptyDatabase(): DatabaseShape {
     playlistItems: [],
     schedules: [],
     devices: [],
-    deviceCommands: []
+    deviceCommands: [],
+    playbackEvents: [],
+    deviceLogs: []
   };
 }
 
@@ -60,7 +64,19 @@ export async function ensurePrismaAdminAccount(prisma: any, options: AdminOption
 }
 
 export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
-  const [users, clients, channels, media, playlists, playlistItems, schedules, devices, deviceCommands] = await Promise.all([
+  const [
+    users,
+    clients,
+    channels,
+    media,
+    playlists,
+    playlistItems,
+    schedules,
+    devices,
+    deviceCommands,
+    playbackEvents,
+    deviceLogs
+  ] = await Promise.all([
     prisma.user.findMany(),
     prisma.client.findMany(),
     prisma.channel.findMany(),
@@ -69,7 +85,9 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
     prisma.playlistItem.findMany(),
     prisma.schedule.findMany(),
     prisma.device.findMany(),
-    prisma.deviceCommand.findMany()
+    prisma.deviceCommand.findMany(),
+    prisma.playbackEvent.findMany(),
+    prisma.deviceLog.findMany()
   ]);
 
   return {
@@ -112,6 +130,18 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
       requestedAt: toIso(entry.requestedAt),
       sentAt: toIsoOrEmpty(entry.sentAt),
       ackedAt: toIsoOrEmpty(entry.ackedAt)
+    })),
+    playbackEvents: playbackEvents.map((entry) => ({
+      ...withIsoDates(entry),
+      channelId: entry.channelId || ""
+    })),
+    deviceLogs: deviceLogs.map((entry) => ({
+      ...withIsoDates(entry),
+      context: entry.context || {},
+      stack: entry.stack || "",
+      appVersion: entry.appVersion || "",
+      osVersion: entry.osVersion || "",
+      networkStatus: entry.networkStatus || ""
     }))
   };
 }
@@ -122,7 +152,9 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
   await prisma.$transaction(async (tx) => {
     await tx.auditLog.deleteMany();
     await tx.session.deleteMany();
+    await tx.deviceLog.deleteMany();
     await tx.deviceCommand.deleteMany();
+    await tx.playbackEvent.deleteMany();
     await tx.userClient.deleteMany();
     await tx.playlistItem.deleteMany();
     await tx.schedule.deleteMany();
@@ -143,6 +175,8 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await createMany(tx.schedule, batches.schedules);
     await createMany(tx.device, batches.devices);
     await createMany(tx.deviceCommand, batches.deviceCommands);
+    await createMany(tx.playbackEvent, batches.playbackEvents);
+    await createMany(tx.deviceLog, batches.deviceLogs);
   });
 }
 
@@ -200,7 +234,7 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       id: entry.id,
       clientId: entry.clientId,
       title: entry.title,
-      kind: entry.kind === "image" ? "image" : "video",
+      kind: mediaKindOrDefault(entry.kind),
       fileName: entry.fileName,
       originalName: entry.originalName || entry.fileName,
       mimeType: entry.mimeType || "application/octet-stream",
@@ -307,6 +341,41 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       updatedAt: toDate(entry.updatedAt)
     }));
 
+  const playbackEvents = ((database as any).playbackEvents || [])
+    .filter((entry) => clientIds.has(entry.clientId) && mediaIds.has(entry.mediaId))
+    .map((entry) => ({
+      id: entry.id,
+      clientId: entry.clientId,
+      channelId: channelIds.has(entry.channelId) ? entry.channelId : null,
+      mediaId: entry.mediaId,
+      name: entry.name || "Playback event",
+      eventType: eventTypeOrDefault(entry.eventType),
+      triggerMode: triggerModeOrDefault(entry.triggerMode),
+      intervalItems: Number(entry.intervalItems || 1) || 1,
+      intervalMinutes: Number(entry.intervalMinutes || 0) || 0,
+      priority: Number(entry.priority || 100) || 100,
+      isActive: entry.isActive !== false,
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
+
+  const deviceLogs = ((database as any).deviceLogs || [])
+    .filter((entry) => deviceIds.has(entry.deviceId))
+    .map((entry) => ({
+      id: entry.id,
+      deviceId: entry.deviceId,
+      severity: logSeverityOrDefault(entry.severity),
+      component: entry.component || "player",
+      message: entry.message || "",
+      stack: entry.stack || "",
+      context: entry.context || {},
+      appVersion: entry.appVersion || "",
+      osVersion: entry.osVersion || "",
+      networkStatus: entry.networkStatus || "",
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
+
   return {
     users,
     clients,
@@ -317,7 +386,9 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     playlistItems,
     schedules,
     devices,
-    deviceCommands
+    deviceCommands,
+    playbackEvents,
+    deviceLogs
   };
 }
 
@@ -371,6 +442,22 @@ function commandTypeOrDefault(value: string) {
 
 function commandStatusOrDefault(value: string) {
   return ["pending", "sent", "acked", "failed"].includes(value) ? value : "pending";
+}
+
+function mediaKindOrDefault(value: string) {
+  return ["video", "image", "audio"].includes(value) ? value : "video";
+}
+
+function eventTypeOrDefault(value: string) {
+  return ["audio", "visual"].includes(value) ? value : "visual";
+}
+
+function triggerModeOrDefault(value: string) {
+  return ["items", "minutes"].includes(value) ? value : "items";
+}
+
+function logSeverityOrDefault(value: string) {
+  return ["info", "warn", "error"].includes(value) ? value : "info";
 }
 
 function toDate(value: string | Date | null | undefined) {

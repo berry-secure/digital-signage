@@ -7,6 +7,7 @@ import {
   createClient,
   createPlaylist,
   createPlaylistItem,
+  createPlaybackEvent,
   createSchedule,
   createUser,
   deleteChannel,
@@ -15,6 +16,7 @@ import {
   deleteMedia,
   deletePlaylist,
   deletePlaylistItem,
+  deletePlaybackEvent,
   deleteSchedule,
   deleteUser,
   fetchBootstrap,
@@ -28,6 +30,7 @@ import {
   updateChannel,
   updateClient,
   updateDevice,
+  updatePlaybackEvent,
   updatePlaylist,
   updateSchedule,
   updateUser,
@@ -49,14 +52,27 @@ import type {
   DeviceCommandType,
   DeviceRecord,
   InstallationInfo,
+  MediaKind,
   MediaRecord,
+  PlaybackEventRecord,
   PlaylistRecord,
   ScheduleRecord,
   UserRecord,
   UserRole
 } from "./types";
 
-type SectionKey = "overview" | "users" | "clients" | "channels" | "media" | "playlists" | "schedule" | "devices" | "install";
+type SectionKey =
+  | "overview"
+  | "users"
+  | "clients"
+  | "channels"
+  | "media"
+  | "playlists"
+  | "events"
+  | "schedule"
+  | "devices"
+  | "logs"
+  | "install";
 type FlashMessage = { kind: "success" | "error"; text: string };
 
 type UserFormState = {
@@ -86,12 +102,34 @@ type ChannelFormState = {
 type MediaFormState = {
   clientId: string;
   title: string;
-  kind: "video" | "image";
+  kind: MediaKind;
   durationSeconds: string;
   hasAudio: boolean;
   status: "draft" | "published";
   tags: string;
   file: File | null;
+};
+
+type PlaybackEventFormState = {
+  id: string;
+  clientId: string;
+  channelId: string;
+  mediaId: string;
+  name: string;
+  eventType: "audio" | "visual";
+  triggerMode: "items" | "minutes";
+  intervalItems: string;
+  intervalMinutes: string;
+  priority: string;
+  isActive: boolean;
+};
+
+type DeviceLogFilters = {
+  clientId: string;
+  deviceId: string;
+  severity: "" | "info" | "warn" | "error";
+  component: string;
+  query: string;
 };
 
 type PlaylistFormState = {
@@ -146,8 +184,10 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "channels", label: "Kanały", hint: "grupy emisji" },
   { key: "media", label: "Media", hint: "video i obrazy" },
   { key: "playlists", label: "Playlisty", hint: "kolejność materiałów" },
+  { key: "events", label: "Eventy", hint: "komunikaty w emisji" },
   { key: "schedule", label: "Harmonogramy", hint: "emisja wg czasu" },
   { key: "devices", label: "Urządzenia", hint: "seriale i approval" },
+  { key: "logs", label: "Logi", hint: "błędy playerów" },
   { key: "install", label: "Instalacja", hint: "APK i adres serwera" }
 ];
 
@@ -180,6 +220,16 @@ const liveCommandOptions: Array<{ value: DeviceCommandType; label: string }> = [
   { value: "set_volume", label: "Apply volume" }
 ];
 
+const playbackEventTypeOptions: Array<{ value: PlaybackEventFormState["eventType"]; label: string }> = [
+  { value: "visual", label: "Graficzny / wizualny" },
+  { value: "audio", label: "Głosowy / audio" }
+];
+
+const playbackEventTriggerOptions: Array<{ value: PlaybackEventFormState["triggerMode"]; label: string }> = [
+  { value: "items", label: "Co X odtworzonych mediów" },
+  { value: "minutes", label: "Co X minut emisji" }
+];
+
 const emptyBootstrap: BootstrapPayload = {
   user: { id: "", email: "", name: "", role: "owner" },
   users: [],
@@ -190,7 +240,9 @@ const emptyBootstrap: BootstrapPayload = {
   playlists: [],
   schedules: [],
   devices: [],
-  deviceCommands: []
+  deviceCommands: [],
+  playbackEvents: [],
+  deviceLogs: []
 };
 
 const emptyUserForm: UserFormState = {
@@ -260,6 +312,20 @@ const emptyScheduleForm: ScheduleFormState = {
   isActive: true
 };
 
+const emptyPlaybackEventForm: PlaybackEventFormState = {
+  id: "",
+  clientId: "",
+  channelId: "",
+  mediaId: "",
+  name: "",
+  eventType: "visual",
+  triggerMode: "items",
+  intervalItems: "1",
+  intervalMinutes: "5",
+  priority: "100",
+  isActive: true
+};
+
 const emptyDeviceForm: DeviceFormState = {
   id: "",
   serial: "",
@@ -298,9 +364,17 @@ function App() {
   const [mediaInputKey, setMediaInputKey] = useState(0);
   const [playlistForm, setPlaylistForm] = useState<PlaylistFormState>(emptyPlaylistForm);
   const [playlistItemForm, setPlaylistItemForm] = useState<PlaylistItemFormState>(emptyPlaylistItemForm);
+  const [playbackEventForm, setPlaybackEventForm] = useState<PlaybackEventFormState>(emptyPlaybackEventForm);
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(emptyScheduleForm);
   const [deviceForm, setDeviceForm] = useState<DeviceFormState>(emptyDeviceForm);
   const [deviceFilters, setDeviceFilters] = useState<DeviceCenterFilters>({ clientId: "", query: "", type: "" });
+  const [deviceLogFilters, setDeviceLogFilters] = useState<DeviceLogFilters>({
+    clientId: "",
+    deviceId: "",
+    severity: "",
+    component: "",
+    query: ""
+  });
   const [deviceCommandDrafts, setDeviceCommandDrafts] = useState<Record<string, DeviceCommandType>>({});
 
   const clients = dashboard.clients;
@@ -310,6 +384,8 @@ function App() {
   const schedules = dashboard.schedules;
   const devices = dashboard.devices;
   const deviceCommands = dashboard.deviceCommands || [];
+  const playbackEvents = dashboard.playbackEvents || [];
+  const deviceLogs = dashboard.deviceLogs || [];
   const filteredDevices = useMemo(() => filterDeviceCenterDevices(devices, deviceFilters), [devices, deviceFilters]);
   const pendingDevices = filteredDevices.filter((device) => device.approvalStatus === "pending");
   const approvedDevices = filteredDevices.filter((device) => device.approvalStatus === "approved");
@@ -317,6 +393,10 @@ function App() {
   const deviceFormIsPending = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "pending");
   const deviceFormIsApproved = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "approved");
   const latestCommandByDevice = useMemo(() => buildLatestCommandLookup(deviceCommands), [deviceCommands]);
+  const filteredDeviceLogs = useMemo(
+    () => filterDeviceLogs(deviceLogs, devices, deviceLogFilters),
+    [deviceLogFilters, deviceLogs, devices]
+  );
 
   const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
   const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
@@ -329,6 +409,19 @@ function App() {
   const filteredChannelsForSchedule = useMemo(
     () => channels.filter((channel) => !scheduleForm.clientId || channel.clientId === scheduleForm.clientId),
     [channels, scheduleForm.clientId]
+  );
+  const filteredChannelsForEvent = useMemo(
+    () => channels.filter((channel) => !playbackEventForm.clientId || channel.clientId === playbackEventForm.clientId),
+    [channels, playbackEventForm.clientId]
+  );
+  const filteredMediaForEvent = useMemo(
+    () =>
+      media.filter(
+        (entry) =>
+          (!playbackEventForm.clientId || entry.clientId === playbackEventForm.clientId) &&
+          (playbackEventForm.eventType === "audio" ? entry.kind === "audio" : entry.kind !== "audio")
+      ),
+    [media, playbackEventForm.clientId, playbackEventForm.eventType]
   );
   const filteredPlaylistsForSchedule = useMemo(
     () =>
@@ -504,6 +597,23 @@ function App() {
     setActiveSection("schedule");
   }
 
+  function beginPlaybackEventEdit(event: PlaybackEventRecord) {
+    setPlaybackEventForm({
+      id: event.id,
+      clientId: event.clientId,
+      channelId: event.channelId,
+      mediaId: event.mediaId,
+      name: event.name,
+      eventType: event.eventType,
+      triggerMode: event.triggerMode,
+      intervalItems: String(event.intervalItems || 1),
+      intervalMinutes: String(event.intervalMinutes || 5),
+      priority: String(event.priority || 100),
+      isActive: event.isActive
+    });
+    setActiveSection("events");
+  }
+
   function beginDeviceApproval(device: DeviceRecord) {
     setDeviceForm({
       id: device.id,
@@ -579,7 +689,9 @@ function App() {
     { label: "Kanały", value: channels.length, hint: "grupy emisji" },
     { label: "Media", value: media.length, hint: "pliki opublikowane i draft" },
     { label: "Playlisty", value: playlists.length, hint: "kolejki treści" },
+    { label: "Eventy", value: playbackEvents.length, hint: "komunikaty w emisji" },
     { label: "Harmonogramy", value: schedules.length, hint: "aktywne reguły" },
+    { label: "Logi błędów", value: deviceLogs.filter((log) => log.severity === "error").length, hint: "ostatnie raporty playerów" },
     { label: "Urządzenia online", value: approvedDevices.filter((device) => device.online).length, hint: "serca playerów" }
   ];
 
@@ -1216,11 +1328,16 @@ function App() {
                       name="media-kind"
                       value={mediaForm.kind}
                       onChange={(event) =>
-                        setMediaForm((current) => ({ ...current, kind: event.target.value as "video" | "image" }))
+                        setMediaForm((current) => ({
+                          ...current,
+                          kind: event.target.value as MediaKind,
+                          hasAudio: event.target.value !== "image"
+                        }))
                       }
                     >
                       <option value="video">Video</option>
                       <option value="image">Obraz</option>
+                      <option value="audio">Audio</option>
                     </select>
                   </Field>
                   <Field label="Sekundy" htmlFor="media-duration">
@@ -1280,7 +1397,7 @@ function App() {
                     id="media-file"
                     name="media-file"
                     type="file"
-                    accept="video/*,image/*"
+                    accept="video/*,image/*,audio/*"
                     onChange={(event) =>
                       setMediaForm((current) => ({ ...current, file: event.target.files?.[0] || null }))
                     }
@@ -1619,6 +1736,266 @@ function App() {
                 <EmptyState text="Stwórz pierwszą playlistę i dodaj do niej media." />
               )}
             </article>
+          </section>
+        ) : null}
+
+        {activeSection === "events" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token) {
+                    return;
+                  }
+                  const payload = {
+                    clientId: playbackEventForm.clientId,
+                    channelId: playbackEventForm.channelId,
+                    mediaId: playbackEventForm.mediaId,
+                    name: playbackEventForm.name,
+                    eventType: playbackEventForm.eventType,
+                    triggerMode: playbackEventForm.triggerMode,
+                    intervalItems: Number(playbackEventForm.intervalItems || 1),
+                    intervalMinutes: Number(playbackEventForm.intervalMinutes || 0),
+                    priority: Number(playbackEventForm.priority || 100),
+                    isActive: playbackEventForm.isActive
+                  };
+
+                  void runMutation(
+                    async () => {
+                      if (playbackEventForm.id) {
+                        await updatePlaybackEvent(token, playbackEventForm.id, payload);
+                      } else {
+                        await createPlaybackEvent(token, payload);
+                      }
+                    },
+                    playbackEventForm.id ? "Zapisano event emisji." : "Dodano event emisji.",
+                    () => setPlaybackEventForm(emptyPlaybackEventForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{playbackEventForm.id ? "Edytuj event" : "Nowy event"}</h3>
+                  {playbackEventForm.id ? (
+                    <button className="ghost-button" type="button" onClick={() => setPlaybackEventForm(emptyPlaybackEventForm)}>
+                      Anuluj
+                    </button>
+                  ) : null}
+                </header>
+                <Field label="Klient" htmlFor="event-client">
+                  <select
+                    id="event-client"
+                    name="event-client"
+                    value={playbackEventForm.clientId}
+                    onChange={(event) =>
+                      setPlaybackEventForm((current) => ({
+                        ...current,
+                        clientId: event.target.value,
+                        channelId: "",
+                        mediaId: ""
+                      }))
+                    }
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Kanał" htmlFor="event-channel">
+                  <select
+                    id="event-channel"
+                    name="event-channel"
+                    value={playbackEventForm.channelId}
+                    onChange={(event) =>
+                      setPlaybackEventForm((current) => ({ ...current, channelId: event.target.value }))
+                    }
+                  >
+                    <option value="">Wszystkie kanały klienta</option>
+                    {filteredChannelsForEvent.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Nazwa eventu" htmlFor="event-name">
+                  <input
+                    id="event-name"
+                    name="event-name"
+                    value={playbackEventForm.name}
+                    onChange={(event) => setPlaybackEventForm((current) => ({ ...current, name: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Typ eventu" htmlFor="event-type">
+                    <select
+                      id="event-type"
+                      name="event-type"
+                      value={playbackEventForm.eventType}
+                      onChange={(event) =>
+                        setPlaybackEventForm((current) => ({
+                          ...current,
+                          eventType: event.target.value as PlaybackEventFormState["eventType"],
+                          mediaId: ""
+                        }))
+                      }
+                    >
+                      {playbackEventTypeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Wyzwalacz" htmlFor="event-trigger">
+                    <select
+                      id="event-trigger"
+                      name="event-trigger"
+                      value={playbackEventForm.triggerMode}
+                      onChange={(event) =>
+                        setPlaybackEventForm((current) => ({
+                          ...current,
+                          triggerMode: event.target.value as PlaybackEventFormState["triggerMode"]
+                        }))
+                      }
+                    >
+                      {playbackEventTriggerOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+                <Field label="Media eventu" htmlFor="event-media">
+                  <select
+                    id="event-media"
+                    name="event-media"
+                    value={playbackEventForm.mediaId}
+                    onChange={(event) => setPlaybackEventForm((current) => ({ ...current, mediaId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz media</option>
+                    {filteredMediaForEvent.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.title} · {entry.kind}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="inline-grid triple">
+                  <Field label="Co ile mediów" htmlFor="event-interval-items">
+                    <input
+                      id="event-interval-items"
+                      name="event-interval-items"
+                      type="number"
+                      min="1"
+                      value={playbackEventForm.intervalItems}
+                      disabled={playbackEventForm.triggerMode !== "items"}
+                      onChange={(event) =>
+                        setPlaybackEventForm((current) => ({ ...current, intervalItems: event.target.value }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Co ile minut" htmlFor="event-interval-minutes">
+                    <input
+                      id="event-interval-minutes"
+                      name="event-interval-minutes"
+                      type="number"
+                      min="1"
+                      value={playbackEventForm.intervalMinutes}
+                      disabled={playbackEventForm.triggerMode !== "minutes"}
+                      onChange={(event) =>
+                        setPlaybackEventForm((current) => ({ ...current, intervalMinutes: event.target.value }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Priorytet" htmlFor="event-priority">
+                    <input
+                      id="event-priority"
+                      name="event-priority"
+                      type="number"
+                      value={playbackEventForm.priority}
+                      onChange={(event) =>
+                        setPlaybackEventForm((current) => ({ ...current, priority: event.target.value }))
+                      }
+                    />
+                  </Field>
+                </div>
+                <label className="checkbox-row" htmlFor="event-active">
+                  <input
+                    id="event-active"
+                    name="event-active"
+                    type="checkbox"
+                    checked={playbackEventForm.isActive}
+                    onChange={(event) =>
+                      setPlaybackEventForm((current) => ({ ...current, isActive: event.target.checked }))
+                    }
+                  />
+                  <span>Event aktywny</span>
+                </label>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {playbackEventForm.id ? "Zapisz event" : "Dodaj event"}
+                </button>
+              </form>
+
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Aktywne eventy</h3>
+                  <span>{playbackEvents.length}</span>
+                </header>
+                {playbackEvents.length ? (
+                  <div className="list-stack">
+                    {playbackEvents.map((event) => (
+                      <div key={event.id} className="list-card">
+                        <div>
+                          <strong>{event.name}</strong>
+                          <span>
+                            {event.clientName || clientLookup.get(event.clientId)?.name || "bez klienta"} ·{" "}
+                            {event.channelName || channelLookup.get(event.channelId)?.name || "wszystkie kanały"} ·{" "}
+                            {eventTypeLabel(event.eventType)}
+                          </span>
+                          <small>
+                            {event.mediaTitle || mediaLookup.get(event.mediaId)?.title || "brak media"} ·{" "}
+                            {event.triggerMode === "items"
+                              ? `co ${event.intervalItems} mediów`
+                              : `co ${event.intervalMinutes} min`}
+                          </small>
+                        </div>
+                        <div className="card-actions">
+                          <span className={`status-pill ${event.isActive ? "online" : "offline"}`}>
+                            {event.isActive ? "active" : "paused"}
+                          </span>
+                          <button className="ghost-button" type="button" onClick={() => beginPlaybackEventEdit(event)}>
+                            Edytuj
+                          </button>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć event ${event.name}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deletePlaybackEvent(token, event.id), "Usunięto event emisji.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Nie ma jeszcze eventów wplatanych w emisję." />
+                )}
+              </article>
+            </div>
           </section>
         ) : null}
 
@@ -2296,6 +2673,121 @@ function App() {
           </section>
         ) : null}
 
+        {activeSection === "logs" ? (
+          <section className="section-stack">
+            <div className="panel device-filter-bar logs-filter-bar">
+              <Field label="Klient" htmlFor="log-filter-client">
+                <select
+                  id="log-filter-client"
+                  name="log-filter-client"
+                  value={deviceLogFilters.clientId}
+                  onChange={(event) =>
+                    setDeviceLogFilters((current) => ({ ...current, clientId: event.target.value, deviceId: "" }))
+                  }
+                >
+                  <option value="">Wszyscy klienci</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Urządzenie" htmlFor="log-filter-device">
+                <select
+                  id="log-filter-device"
+                  name="log-filter-device"
+                  value={deviceLogFilters.deviceId}
+                  onChange={(event) => setDeviceLogFilters((current) => ({ ...current, deviceId: event.target.value }))}
+                >
+                  <option value="">Wszystkie urządzenia</option>
+                  {devices
+                    .filter((device) => !deviceLogFilters.clientId || device.clientId === deviceLogFilters.clientId)
+                    .map((device) => (
+                      <option key={device.id} value={device.id}>
+                        {device.name || device.serial}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+              <Field label="Severity" htmlFor="log-filter-severity">
+                <select
+                  id="log-filter-severity"
+                  name="log-filter-severity"
+                  value={deviceLogFilters.severity}
+                  onChange={(event) =>
+                    setDeviceLogFilters((current) => ({
+                      ...current,
+                      severity: event.target.value as DeviceLogFilters["severity"]
+                    }))
+                  }
+                >
+                  <option value="">Wszystkie</option>
+                  <option value="error">Error</option>
+                  <option value="warn">Warn</option>
+                  <option value="info">Info</option>
+                </select>
+              </Field>
+              <Field label="Szukaj" htmlFor="log-filter-query">
+                <input
+                  id="log-filter-query"
+                  name="log-filter-query"
+                  type="search"
+                  value={deviceLogFilters.query}
+                  onChange={(event) => setDeviceLogFilters((current) => ({ ...current, query: event.target.value }))}
+                  placeholder="Komponent, wiadomość, serial, wersja..."
+                />
+              </Field>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setDeviceLogFilters({ clientId: "", deviceId: "", severity: "", component: "", query: "" })}
+                disabled={
+                  !deviceLogFilters.clientId &&
+                  !deviceLogFilters.deviceId &&
+                  !deviceLogFilters.severity &&
+                  !deviceLogFilters.component &&
+                  !deviceLogFilters.query
+                }
+              >
+                Wyczyść
+              </button>
+            </div>
+
+            <article className="panel">
+              <header className="panel-header">
+                <h3>Logi playerów</h3>
+                <span>{filteredDeviceLogs.length} / {deviceLogs.length}</span>
+              </header>
+              {filteredDeviceLogs.length ? (
+                <div className="list-stack">
+                  {filteredDeviceLogs.map((log) => (
+                    <div key={log.id} className="list-card log-card">
+                      <div>
+                        <strong>{log.message}</strong>
+                        <span>
+                          {log.deviceName || log.deviceSerial || "nieznane urządzenie"} · {log.clientName || "bez klienta"} ·{" "}
+                          {log.component}
+                        </span>
+                        <small>
+                          APK {log.appVersion || "brak"} · OS {log.osVersion || "brak"} · sieć {log.networkStatus || "brak"} ·{" "}
+                          {formatDateTime(log.createdAt)}
+                        </small>
+                        {log.stack ? <code className="log-stack">{log.stack}</code> : null}
+                      </div>
+                      <div className="align-right">
+                        <span className={`status-pill ${logSeverityClass(log.severity)}`}>{log.severity}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState text="Brak logów pasujących do filtrów." />
+              )}
+            </article>
+          </section>
+        ) : null}
+
         {activeSection === "install" ? (
           <section className="section-stack">
             <div className="card-grid two-columns">
@@ -2385,6 +2877,20 @@ function commandStatusLabel(status: DeviceCommandRecord["status"]) {
   return "błąd";
 }
 
+function eventTypeLabel(type: PlaybackEventRecord["eventType"]) {
+  return type === "audio" ? "audio" : "wizualny";
+}
+
+function logSeverityClass(severity: "info" | "warn" | "error") {
+  if (severity === "error") {
+    return "offline";
+  }
+  if (severity === "warn") {
+    return "pending";
+  }
+  return "neutral";
+}
+
 function buildLatestCommandLookup(commands: DeviceCommandRecord[]) {
   const lookup = new Map<string, DeviceCommandRecord>();
   for (const command of [...commands].sort(sortCommandsByUpdatedDesc)) {
@@ -2397,6 +2903,39 @@ function buildLatestCommandLookup(commands: DeviceCommandRecord[]) {
 
 function sortCommandsByUpdatedDesc(left: DeviceCommandRecord, right: DeviceCommandRecord) {
   return new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime();
+}
+
+function filterDeviceLogs(
+  logs: BootstrapPayload["deviceLogs"],
+  devices: DeviceRecord[],
+  filters: DeviceLogFilters
+) {
+  const deviceLookup = new Map(devices.map((device) => [device.id, device]));
+  const query = filters.query.trim().toLowerCase();
+
+  return logs.filter((log) => {
+    const device = deviceLookup.get(log.deviceId);
+    if (filters.clientId && log.clientId !== filters.clientId && device?.clientId !== filters.clientId) {
+      return false;
+    }
+    if (filters.deviceId && log.deviceId !== filters.deviceId) {
+      return false;
+    }
+    if (filters.severity && log.severity !== filters.severity) {
+      return false;
+    }
+    if (filters.component && log.component !== filters.component) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+
+    return [log.message, log.component, log.deviceName, log.deviceSerial, log.clientName, log.appVersion, log.osVersion, log.networkStatus]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
 }
 
 function Field(props: { label: string; htmlFor: string; children: ReactNode }) {

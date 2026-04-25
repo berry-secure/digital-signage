@@ -22,6 +22,7 @@ function App() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const imageTimerRef = useRef<number | null>(null);
   const heartbeatRef = useRef({
     playerState: "waiting" as PlayerState,
@@ -89,6 +90,19 @@ function App() {
     player.muted = !currentItem.hasAudio;
     void player.play().catch(() => {
       setStatusMessage("Video czeka na możliwość startu w WebView.");
+    });
+  }, [currentItem]);
+
+  useEffect(() => {
+    if (!currentItem || currentItem.kind !== "audio" || !audioRef.current) {
+      return;
+    }
+
+    const player = audioRef.current;
+    player.volume = clamp(currentItem.volumePercent / 100, 0, 1);
+    player.muted = false;
+    void player.play().catch(() => {
+      setStatusMessage("Audio czeka na możliwość startu w WebView.");
     });
   }, [currentItem]);
 
@@ -203,6 +217,35 @@ function App() {
     }
 
     return { status: "failed", message: "Ta komenda wymaga natywnego agenta playera v2." };
+  }
+
+  async function reportDeviceLog(payload: {
+    severity: "info" | "warn" | "error";
+    component: string;
+    message: string;
+    stack?: string;
+    context?: Record<string, unknown>;
+  }) {
+    try {
+      await fetch(`${apiBaseUrl}/api/player/logs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serial: identity.serial,
+          secret: identity.secret,
+          severity: payload.severity,
+          component: payload.component,
+          message: payload.message,
+          stack: payload.stack || "",
+          context: payload.context || {},
+          appVersion,
+          osVersion: safeDeviceModel(),
+          networkStatus: typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "online"
+        })
+      });
+    } catch {
+      // Logs are best-effort; playback should continue even when reporting fails.
+    }
   }
 
   async function resetApproval() {
@@ -349,10 +392,16 @@ function App() {
               onEnded={advanceQueue}
               onError={() => {
                 setStatusMessage(`Nie udało się odtworzyć pliku ${currentItem.title}.`);
+                void reportDeviceLog({
+                  severity: "error",
+                  component: "playback",
+                  message: `Nie udało się odtworzyć pliku ${currentItem.title}.`,
+                  context: { itemId: currentItem.id, kind: currentItem.kind, eventId: currentItem.eventId || "" }
+                });
                 advanceQueue();
               }}
             />
-          ) : (
+          ) : currentItem.kind === "image" ? (
             <img
               key={currentItem.id}
               className="media-surface"
@@ -360,9 +409,37 @@ function App() {
               alt={currentItem.title}
               onError={() => {
                 setStatusMessage(`Nie udało się wczytać obrazu ${currentItem.title}.`);
+                void reportDeviceLog({
+                  severity: "error",
+                  component: "playback",
+                  message: `Nie udało się wczytać obrazu ${currentItem.title}.`,
+                  context: { itemId: currentItem.id, kind: currentItem.kind, eventId: currentItem.eventId || "" }
+                });
                 advanceQueue();
               }}
             />
+          ) : (
+            <div key={currentItem.id} className="audio-event-stage">
+              <audio
+                ref={audioRef}
+                src={currentItem.url}
+                autoPlay
+                preload="auto"
+                onEnded={advanceQueue}
+                onError={() => {
+                  setStatusMessage(`Nie udało się odtworzyć audio ${currentItem.title}.`);
+                  void reportDeviceLog({
+                    severity: "error",
+                    component: "playback",
+                    message: `Nie udało się odtworzyć audio ${currentItem.title}.`,
+                    context: { itemId: currentItem.id, kind: currentItem.kind, eventId: currentItem.eventId || "" }
+                  });
+                  advanceQueue();
+                }}
+              />
+              <span className="eyebrow">Komunikat audio</span>
+              <strong>{currentItem.title}</strong>
+            </div>
           )}
         </main>
       ) : phase === "waiting" ? (
