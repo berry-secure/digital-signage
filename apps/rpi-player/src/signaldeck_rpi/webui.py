@@ -7,6 +7,10 @@ from typing import Any
 import argparse
 import html
 import json
+import os
+import shlex
+import shutil
+import socket
 import subprocess
 from urllib.parse import parse_qs
 
@@ -38,6 +42,7 @@ class StatusProvider:
             "baseSerial": self.identity.base_serial,
             "serverUrl": self.config.server_url,
             "appVersion": self.config.app_version,
+            "system": self._system_status(),
             "sync": {
                 "mode": self.config.sync.mode,
                 "group": self.config.sync.group,
@@ -59,6 +64,25 @@ class StatusProvider:
             return 0
         return len(data) if isinstance(data, list) else 0
 
+    def _system_status(self) -> dict[str, Any]:
+        disk = shutil.disk_usage(self.state_root if self.state_root.exists() else Path("/"))
+        return {
+            "hostname": socket.gethostname(),
+            "cpuLoad": _cpu_load(),
+            "memory": _memory_status(),
+            "disk": {
+                "totalGb": round(disk.total / 1024**3, 2),
+                "usedGb": round(disk.used / 1024**3, 2),
+                "freeGb": round(disk.free / 1024**3, 2),
+                "usedPercent": round((disk.used / disk.total) * 100, 1) if disk.total else 0,
+            },
+            "cacheMb": round(_directory_size(self.state_root / "cache") / 1024**2, 1),
+            "timezone": _read_timezone(),
+            "ipAddresses": _capture(["hostname", "-I"]),
+            "agentService": _capture(["systemctl", "is-active", "signaldeck-agent.service"]) or "unknown",
+            "webuiService": _capture(["systemctl", "is-active", "signaldeck-webui.service"]) or "unknown",
+        }
+
 
 @dataclass
 class WebUiApp:
@@ -69,8 +93,9 @@ class WebUiApp:
 
     def render_index_html(self) -> str:
         status = self.render_status_json()
+        system = status["system"]
         output_rows = "\n".join(
-            f"<tr><td>{html.escape(name)}</td><td>{html.escape(value['serial'])}</td><td>{html.escape(str(value['enabled']))}</td></tr>"
+            f"<tr><td>{html.escape(name)}</td><td>{html.escape(value['serial'])}</td><td>{html.escape(str(value['enabled']))}</td><td>{html.escape(value.get('connector') or 'not detected')}</td><td>{html.escape(str(value.get('manifestItems', 0)))}</td></tr>"
             for name, value in status["outputs"].items()
         )
         return f"""<!doctype html>
@@ -91,6 +116,8 @@ class WebUiApp:
     button {{ margin-top: 1rem; padding: .65rem .9rem; font: inherit; font-weight: 700; cursor: pointer; }}
     .row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }}
     .hint {{ color: #555; }}
+    .metric {{ background: #f2f2ee; padding: .75rem; }}
+    .actions form {{ display: inline-block; margin: .25rem .5rem .25rem 0; }}
   </style>
 </head>
 <body>
@@ -99,8 +126,22 @@ class WebUiApp:
     <p>Base serial: <code>{html.escape(status["baseSerial"])}</code></p>
     <p>Server: <code>{html.escape(status["serverUrl"])}</code></p>
     <p>Sync: <code>{html.escape(status["sync"]["mode"])}</code></p>
+    <section>
+      <h2>Diagnostics</h2>
+      <div class="row">
+        <div class="metric">Hostname<br><strong>{html.escape(system["hostname"])}</strong></div>
+        <div class="metric">IP<br><strong>{html.escape(system["ipAddresses"] or "unknown")}</strong></div>
+        <div class="metric">CPU load<br><strong>{html.escape(str(system["cpuLoad"]))}</strong></div>
+        <div class="metric">RAM used<br><strong>{html.escape(str(system["memory"]["usedMb"]))} MB / {html.escape(str(system["memory"]["totalMb"]))} MB</strong></div>
+        <div class="metric">Disk used<br><strong>{html.escape(str(system["disk"]["usedPercent"]))}%</strong></div>
+        <div class="metric">Cache<br><strong>{html.escape(str(system["cacheMb"]))} MB</strong></div>
+        <div class="metric">Agent<br><strong>{html.escape(system["agentService"])}</strong></div>
+        <div class="metric">WebUI<br><strong>{html.escape(system["webuiService"])}</strong></div>
+      </div>
+      <p><a href="/api/status">Open raw JSON status</a></p>
+    </section>
     <table>
-      <thead><tr><th>Output</th><th>Serial</th><th>Enabled</th></tr></thead>
+      <thead><tr><th>Output</th><th>Serial</th><th>Enabled</th><th>Connector</th><th>Manifest items</th></tr></thead>
       <tbody>{output_rows}</tbody>
     </table>
     <section>
@@ -148,9 +189,32 @@ class WebUiApp:
       </form>
     </section>
     <section>
+      <h2>Czas</h2>
+      <form method="post" action="/api/time">
+        <label for="timezone">Timezone</label>
+        <input id="timezone" name="timezone" value="{html.escape(system["timezone"])}" placeholder="Europe/Warsaw">
+        <label><input type="checkbox" name="ntp" value="1" checked> Use NTP</label>
+        <label for="datetime">Manual datetime</label>
+        <input id="datetime" name="datetime" placeholder="2026-04-26 12:30:00">
+        <button type="submit">Save time settings</button>
+      </form>
+    </section>
+    <section>
+      <h2>Update player</h2>
+      <form method="post" action="/api/update-player">
+        <label for="ref">Git branch/ref</label>
+        <input id="ref" name="ref" value="codex/rpi-video-premium-player">
+        <button type="submit">Run update</button>
+      </form>
+    </section>
+    <section>
       <h2>Serwis</h2>
-      <form method="post" action="/api/restart-agent"><button type="submit">Restart agent</button></form>
-      <form method="post" action="/api/lock-setup"><button type="submit">Mark setup complete</button></form>
+      <div class="actions">
+        <form method="post" action="/api/restart-agent"><button type="submit">Restart agent</button></form>
+        <form method="post" action="/api/force-playlist-update"><button type="submit">Restart playback</button></form>
+        <form method="post" action="/api/lock-setup"><button type="submit">Mark setup complete</button></form>
+        <form method="post" action="/api/reboot"><button type="submit">Reboot OS</button></form>
+      </div>
       <p class="hint">Setup lock: <code>{html.escape(str(status["setupLocked"]))}</code></p>
     </section>
   </main>
@@ -210,6 +274,40 @@ class WebUiApp:
         _run(["systemctl", "restart", "signaldeck-agent.service"])
         return "Agent restarted"
 
+    def save_time(self, fields: dict[str, str]) -> str:
+        timezone = fields.get("timezone", "").strip()
+        if timezone:
+            _run(["timedatectl", "set-timezone", timezone])
+        _run(["timedatectl", "set-ntp", "true" if fields.get("ntp") == "1" else "false"], allow_failure=True)
+        datetime_value = fields.get("datetime", "").strip()
+        if datetime_value:
+            _run(["timedatectl", "set-time", datetime_value], allow_failure=True)
+        return "Time settings saved"
+
+    def update_player(self, fields: dict[str, str]) -> str:
+        ref = fields.get("ref", "codex/rpi-video-premium-player").strip() or "codex/rpi-video-premium-player"
+        quoted_ref = shlex.quote(ref)
+        command = (
+            "curl -fsSL "
+            f"https://raw.githubusercontent.com/berry-secure/digital-signage/{quoted_ref}/scripts/rpi/install-video-premium.sh "
+            "-o /tmp/install-signaldeck.sh && "
+            f"SIGNALDECK_REF={quoted_ref} bash /tmp/install-signaldeck.sh"
+        )
+        _run(["bash", "-lc", command])
+        return "Update started"
+
+    def force_playlist_update(self) -> str:
+        manifests_dir = self.provider.state_root / "manifests"
+        if manifests_dir.exists():
+            for path in manifests_dir.glob("*.json"):
+                path.unlink(missing_ok=True)
+        _run(["systemctl", "restart", "signaldeck-agent.service"], allow_failure=True)
+        return "Playlist refresh requested"
+
+    def reboot_os(self) -> str:
+        _run(["systemctl", "reboot"], allow_failure=True)
+        return "Reboot requested"
+
     def mark_setup_complete(self) -> str:
         self.provider.boot_dir.mkdir(parents=True, exist_ok=True)
         (self.provider.boot_dir / "SIGNALDECK_LOCK").write_text("configured\n", encoding="utf-8")
@@ -244,6 +342,14 @@ def make_handler(app: WebUiApp):
                     message = app.save_wifi(fields)
                 elif self.path == "/api/restart-agent":
                     message = app.restart_agent()
+                elif self.path == "/api/time":
+                    message = app.save_time(fields)
+                elif self.path == "/api/update-player":
+                    message = app.update_player(fields)
+                elif self.path == "/api/force-playlist-update":
+                    message = app.force_playlist_update()
+                elif self.path == "/api/reboot":
+                    message = app.reboot_os()
                 elif self.path == "/api/lock-setup":
                     message = app.mark_setup_complete()
                 else:
@@ -345,3 +451,49 @@ def _run(command: list[str], allow_failure: bool = False) -> subprocess.Complete
         detail = (result.stderr or result.stdout or "command failed").strip()
         raise RuntimeError(f"{' '.join(command)}: {detail}")
     return result
+
+
+def _capture(command: list[str]) -> str:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _cpu_load() -> float:
+    try:
+        return round(os.getloadavg()[0], 2)
+    except OSError:
+        return 0.0
+
+
+def _memory_status() -> dict[str, int]:
+    meminfo = Path("/proc/meminfo")
+    if not meminfo.exists():
+        return {"totalMb": 0, "usedMb": 0, "freeMb": 0}
+    values: dict[str, int] = {}
+    for line in meminfo.read_text(encoding="utf-8").splitlines():
+        key, _, rest = line.partition(":")
+        number = rest.strip().split(" ", 1)[0]
+        if number.isdigit():
+            values[key] = int(number)
+    total = values.get("MemTotal", 0) // 1024
+    available = values.get("MemAvailable", 0) // 1024
+    used = max(total - available, 0)
+    return {"totalMb": total, "usedMb": used, "freeMb": available}
+
+
+def _directory_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _read_timezone() -> str:
+    timezone = Path("/etc/timezone")
+    if timezone.exists():
+        return timezone.read_text(encoding="utf-8").strip() or "Europe/Warsaw"
+    return "Europe/Warsaw"
