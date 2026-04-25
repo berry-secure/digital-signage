@@ -1,6 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DeviceIdentity, MediaKind, PlaybackEntry, PlayerState, SessionResponse } from "./types";
+import type { DeviceCommand, DeviceIdentity, MediaKind, PlaybackEntry, PlayerState, SessionResponse } from "./types";
 
 const identityStorageKey = "signal-deck-device-v1";
 const appVersion = "1.0.1";
@@ -122,6 +122,7 @@ function App() {
       setSession(payload);
       setLastSyncAt(payload.serverTime);
       setLastError("");
+      await acknowledgeLiveCommands(payload.commands || []);
 
       if (payload.approvalStatus === "pending") {
         setPhase("waiting");
@@ -153,6 +154,55 @@ function App() {
         setBusy(false);
       }
     }
+  }
+
+  async function acknowledgeLiveCommands(commands: DeviceCommand[]) {
+    for (const command of commands) {
+      const result = await executeLiveCommand(command);
+      await acknowledgeLiveCommand(command, result.status, result.message);
+    }
+  }
+
+  async function acknowledgeLiveCommand(command: DeviceCommand, status: "acked" | "failed", message: string) {
+    const response = await fetch(`${apiBaseUrl}/api/player/commands/${command.id}/ack`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        serial: identity.serial,
+        secret: identity.secret,
+        status,
+        message
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error("Nie udało się potwierdzić komendy live.");
+    }
+  }
+
+  async function executeLiveCommand(command: DeviceCommand): Promise<{ status: "acked" | "failed"; message: string }> {
+    if (command.type === "force_sync" || command.type === "force_playlist_update") {
+      return { status: "acked", message: "Player odświeżył sesję z CMS." };
+    }
+
+    if (command.type === "blackout" || command.type === "wake") {
+      return { status: "acked", message: "Stan ekranu odebrany z CMS." };
+    }
+
+    if (command.type === "set_volume") {
+      return { status: "acked", message: "Głośność odebrana z CMS." };
+    }
+
+    if (command.type === "clear_cache") {
+      if ("caches" in window) {
+        const keys = await window.caches.keys();
+        await Promise.all(keys.map((key) => window.caches.delete(key)));
+        return { status: "acked", message: "Cache WebView wyczyszczony." };
+      }
+      return { status: "failed", message: "Cache API nie jest dostępne w tym WebView." };
+    }
+
+    return { status: "failed", message: "Ta komenda wymaga natywnego agenta playera v2." };
   }
 
   async function resetApproval() {

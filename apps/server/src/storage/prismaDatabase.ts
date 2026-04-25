@@ -10,6 +10,7 @@ type DatabaseShape = {
   playlistItems: any[];
   schedules: any[];
   devices: any[];
+  deviceCommands: any[];
 };
 
 type AdminOptions = {
@@ -33,7 +34,8 @@ export function createEmptyDatabase(): DatabaseShape {
     playlists: [],
     playlistItems: [],
     schedules: [],
-    devices: []
+    devices: [],
+    deviceCommands: []
   };
 }
 
@@ -58,7 +60,7 @@ export async function ensurePrismaAdminAccount(prisma: any, options: AdminOption
 }
 
 export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
-  const [users, clients, channels, media, playlists, playlistItems, schedules, devices] = await Promise.all([
+  const [users, clients, channels, media, playlists, playlistItems, schedules, devices, deviceCommands] = await Promise.all([
     prisma.user.findMany(),
     prisma.client.findMany(),
     prisma.channel.findMany(),
@@ -66,7 +68,8 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
     prisma.playlist.findMany(),
     prisma.playlistItem.findMany(),
     prisma.schedule.findMany(),
-    prisma.device.findMany()
+    prisma.device.findMany(),
+    prisma.deviceCommand.findMany()
   ]);
 
   return {
@@ -94,11 +97,21 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
       clientId: entry.clientId || "",
       channelId: entry.channelId || "",
       approvalStatus: String(entry.approvalStatus),
+      playerType: entry.playerType || "video_standard",
       desiredDisplayState: String(entry.desiredDisplayState),
       playerState: String(entry.playerState),
       lastSeenAt: toIsoOrEmpty(entry.lastSeenAt),
       lastSyncAt: toIsoOrEmpty(entry.lastSyncAt),
       lastPlaybackAt: toIsoOrEmpty(entry.lastPlaybackAt)
+    })),
+    deviceCommands: deviceCommands.map((entry) => ({
+      ...withIsoDates(entry),
+      status: String(entry.status || "pending"),
+      payload: entry.payload || {},
+      requestedByUserId: entry.requestedByUserId || "",
+      requestedAt: toIso(entry.requestedAt),
+      sentAt: toIsoOrEmpty(entry.sentAt),
+      ackedAt: toIsoOrEmpty(entry.ackedAt)
     }))
   };
 }
@@ -109,6 +122,7 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
   await prisma.$transaction(async (tx) => {
     await tx.auditLog.deleteMany();
     await tx.session.deleteMany();
+    await tx.deviceCommand.deleteMany();
     await tx.userClient.deleteMany();
     await tx.playlistItem.deleteMany();
     await tx.schedule.deleteMany();
@@ -128,6 +142,7 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await createMany(tx.playlistItem, batches.playlistItems);
     await createMany(tx.schedule, batches.schedules);
     await createMany(tx.device, batches.devices);
+    await createMany(tx.deviceCommand, batches.deviceCommands);
   });
 }
 
@@ -261,6 +276,7 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     platform: entry.platform || "android",
     appVersion: entry.appVersion || "",
     deviceModel: entry.deviceModel || "Android TV",
+    playerType: playerTypeOrDefault(entry.playerType),
     desiredDisplayState: entry.desiredDisplayState === "blackout" ? "blackout" : "active",
     volumePercent: Number(entry.volumePercent || 80) || 80,
     playerState: ["waiting", "idle", "playing"].includes(entry.playerState) ? entry.playerState : "waiting",
@@ -272,6 +288,24 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     createdAt: toDate(entry.createdAt),
     updatedAt: toDate(entry.updatedAt)
   }));
+  const deviceIds = new Set(devices.map((entry) => entry.id));
+  const userIdsForCommands = new Set(users.map((entry) => entry.id));
+  const deviceCommands = ((database as any).deviceCommands || [])
+    .filter((entry) => deviceIds.has(entry.deviceId))
+    .map((entry) => ({
+      id: entry.id,
+      deviceId: entry.deviceId,
+      type: commandTypeOrDefault(entry.type),
+      status: commandStatusOrDefault(entry.status),
+      payload: entry.payload || {},
+      message: entry.message || "",
+      requestedByUserId: userIdsForCommands.has(entry.requestedByUserId) ? entry.requestedByUserId : null,
+      requestedAt: toDate(entry.requestedAt || entry.createdAt),
+      sentAt: toNullableDate(entry.sentAt),
+      ackedAt: toNullableDate(entry.ackedAt),
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
 
   return {
     users,
@@ -282,7 +316,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     playlists,
     playlistItems,
     schedules,
-    devices
+    devices,
+    deviceCommands
   };
 }
 
@@ -304,6 +339,34 @@ function withIsoDates(entry: any) {
 
 function roleOrDefault(value: string) {
   return ["owner", "manager", "editor"].includes(value) ? value : "editor";
+}
+
+function playerTypeOrDefault(value: string) {
+  return ["music_mini", "music_max", "video_standard", "video_premium"].includes(value) ? value : "video_standard";
+}
+
+function commandTypeOrDefault(value: string) {
+  return [
+    "reboot_os",
+    "restart_app",
+    "force_sync",
+    "force_playlist_update",
+    "force_app_update",
+    "clear_cache",
+    "screenshot",
+    "blackout",
+    "wake",
+    "set_volume",
+    "network_diagnostics",
+    "upload_logs",
+    "rotate_secret"
+  ].includes(value)
+    ? value
+    : "force_sync";
+}
+
+function commandStatusOrDefault(value: string) {
+  return ["pending", "sent", "acked", "failed"].includes(value) ? value : "pending";
 }
 
 function toDate(value: string | Date | null | undefined) {

@@ -147,6 +147,109 @@ describe("MVP API contract", () => {
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
+
+  it("queues live commands for a player session and accepts command ACK", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-commands-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "commands-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Commands Owner"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "commands-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Live Commands Client" });
+    const channel = await request(isolatedApp)
+      .post("/api/channels")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Main Floor" });
+
+    const playerSession = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKCOMMAND001",
+        secret: "command-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "waiting"
+      });
+
+    const approved = await request(isolatedApp)
+      .post("/api/devices/approve")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        deviceId: playerSession.body.device.id,
+        serial: "MKCOMMAND001",
+        name: "Command Screen",
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        locationLabel: "Lobby",
+        notes: "",
+        playerType: "video_premium",
+        desiredDisplayState: "active",
+        volumePercent: 70
+      });
+
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.device.playerType, "video_premium");
+
+    const queued = await request(isolatedApp)
+      .post(`/api/devices/${approved.body.device.id}/commands`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        type: "set_volume",
+        payload: { volumePercent: 33 }
+      });
+
+    assert.equal(queued.status, 201);
+    assert.equal(queued.body.command.status, "pending");
+    assert.equal(queued.body.command.type, "set_volume");
+    assert.deepEqual(queued.body.command.payload, { volumePercent: 33 });
+    assert.equal(queued.body.device.volumePercent, 33);
+
+    const commandSession = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKCOMMAND001",
+        secret: "command-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "idle"
+      });
+
+    assert.equal(commandSession.status, 200);
+    assert.equal(commandSession.body.commands.length, 1);
+    assert.equal(commandSession.body.commands[0].id, queued.body.command.id);
+    assert.equal(commandSession.body.commands[0].type, "set_volume");
+
+    const ack = await request(isolatedApp)
+      .post(`/api/player/commands/${queued.body.command.id}/ack`)
+      .send({
+        serial: "MKCOMMAND001",
+        secret: "command-secret",
+        status: "acked",
+        message: "Volume applied"
+      });
+
+    assert.equal(ack.status, 200);
+    assert.equal(ack.body.command.status, "acked");
+    assert.equal(ack.body.command.message, "Volume applied");
+
+    const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
+    assert.equal(bootstrap.body.deviceCommands[0].status, "acked");
+    assert.equal(bootstrap.body.deviceCommands[0].deviceName, "Command Screen");
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
 });
 
 function createFakePrisma(calls: string[]) {
@@ -158,7 +261,8 @@ function createFakePrisma(calls: string[]) {
     playlist: [],
     playlistItem: [],
     schedule: [],
-    device: []
+    device: [],
+    deviceCommand: []
   };
 
   const model = (name: string) => ({
@@ -186,6 +290,7 @@ function createFakePrisma(calls: string[]) {
     playlistItem: model("playlistItem"),
     schedule: model("schedule"),
     device: model("device"),
+    deviceCommand: model("deviceCommand"),
     session: model("session"),
     auditLog: model("auditLog"),
     async $transaction(callback: (tx: unknown) => Promise<void>) {

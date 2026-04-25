@@ -85,7 +85,8 @@ export function summarizeDatabase(database: any): MigrationSummary {
       playlists: count(database.playlists),
       playlistItems: count(database.playlistItems),
       schedules: count(database.schedules),
-      devices: count(database.devices)
+      devices: count(database.devices),
+      deviceCommands: count(database.deviceCommands)
     },
     importable: {
       users: batches.users.length,
@@ -95,7 +96,8 @@ export function summarizeDatabase(database: any): MigrationSummary {
       playlists: batches.playlists.length,
       playlistItems: batches.playlistItems.length,
       schedules: batches.schedules.length,
-      devices: batches.devices.length
+      devices: batches.devices.length,
+      deviceCommands: batches.deviceCommands.length
     }
   };
 }
