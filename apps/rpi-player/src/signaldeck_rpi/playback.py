@@ -76,6 +76,10 @@ class MvpProcessController:
         for output in list(self.processes):
             self.stop(output)
 
+    def is_running(self, output: str) -> bool:
+        process = self.processes.get(output)
+        return bool(process and process.poll() is None)
+
 
 def _clamp_int(value: int | float, minimum: int, maximum: int) -> int:
     try:

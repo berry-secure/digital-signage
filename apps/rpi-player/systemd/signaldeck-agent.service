@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=signaldeck
 Group=signaldeck
+SupplementaryGroups=video render input
 WorkingDirectory=/opt/signaldeck/apps/rpi-player
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/signaldeck/venv/bin/python -m signaldeck_agent

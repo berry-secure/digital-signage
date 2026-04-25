@@ -13,6 +13,7 @@ from .cms import CmsClient
 from .commands import route_command
 from .config import PlayerConfig, load_config
 from .identity import PlayerIdentity, load_or_create_system_identity
+from .playback import MvpProcessController, build_mpv_command, playback_decision
 
 LOGGER = logging.getLogger("signaldeck.agent")
 
@@ -24,6 +25,7 @@ class OutputState:
     active_item_title: str = ""
     last_sync_at: str = ""
     last_message: str = ""
+    current_item_id: str = ""
 
 
 @dataclass
@@ -32,6 +34,7 @@ class AgentRuntime:
     identity: PlayerIdentity
     cms: CmsClient
     cache: MediaCache
+    playback_controller: Any = field(default_factory=MvpProcessController)
     states: dict[str, OutputState] = field(default_factory=dict)
 
     def build_session_payloads(self, player_state: str = "idle", active_item_title: str = "") -> list[dict[str, Any]]:
@@ -72,6 +75,7 @@ class AgentRuntime:
             queue = _queue_from_response(response)
             if queue:
                 self.cache.write_manifest(output, queue)
+            self._sync_playback(output, output_identity.serial, output_identity.secret, queue)
 
             for command in response.get("commands") or []:
                 action = route_command(command)
@@ -100,6 +104,57 @@ class AgentRuntime:
         queue = _queue_from_response(response)
         state.active_item_title = str(queue[0].get("title") or "") if queue else ""
         state.last_message = str(response.get("playback", {}).get("reason") or "")
+
+    def _sync_playback(self, output: str, serial: str, secret: str, queue: list[dict[str, Any]]) -> None:
+        state = self.states.setdefault(output, OutputState())
+        if state.desired_display_state == "blackout":
+            self.playback_controller.stop(output)
+            state.current_item_id = ""
+            return
+
+        item = _first_playable(queue)
+        if not item:
+            self.playback_controller.stop(output)
+            state.current_item_id = ""
+            return
+
+        item_id = str(item.get("id") or item.get("url") or "")
+        if state.current_item_id == item_id and self.playback_controller.is_running(output):
+            return
+
+        decision = playback_decision(item)
+        if decision.action != "play":
+            self._log(serial, secret, decision.severity, "playback", decision.message, {"output": output, "item": item})
+            return
+
+        try:
+            media_path = self.cache.download(output, item)
+            command = build_mpv_command(
+                media_path,
+                output,
+                str(item.get("kind") or "video"),
+                item.get("durationSeconds") or 10,
+                item.get("volumePercent") or 100,
+            )
+            self.playback_controller.play(output, command)
+            state.current_item_id = item_id
+        except Exception as error:
+            self._log(serial, secret, "error", "playback", f"failed to start playback on {output}: {error}", {"output": output, "item": item})
+
+    def _log(self, serial: str, secret: str, severity: str, component: str, message: str, context: dict[str, Any]) -> None:
+        try:
+            self.cms.post_log(
+                serial,
+                secret,
+                severity,
+                component,
+                message,
+                context=context,
+                app_version=self.config.app_version,
+                network_status="online",
+            )
+        except Exception:
+            LOGGER.debug("failed to post CMS log", exc_info=True)
 
 
 def create_runtime(
@@ -138,3 +193,10 @@ def _queue_from_response(response: dict[str, Any]) -> list[dict[str, Any]]:
     playback = response.get("playback") if isinstance(response.get("playback"), dict) else {}
     queue = playback.get("queue")
     return queue if isinstance(queue, list) else []
+
+
+def _first_playable(queue: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in queue:
+        if playback_decision(item).action == "play":
+            return item
+    return None
