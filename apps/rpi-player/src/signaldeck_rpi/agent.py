@@ -80,13 +80,19 @@ class AgentRuntime:
 
             for command in response.get("commands") or []:
                 action = route_command(command)
-                self.cms.ack_command(
-                    str(command.get("id") or ""),
-                    output_identity.serial,
-                    output_identity.secret,
-                    action.ack_status,
-                    action.message,
-                )
+                command_id = str(command.get("id") or "")
+                try:
+                    self.cms.ack_command(
+                        command_id,
+                        output_identity.serial,
+                        output_identity.secret,
+                        action.ack_status,
+                        action.message,
+                    )
+                except Exception as error:
+                    message = f"failed to ack command {command_id}: {error}"
+                    LOGGER.warning(message)
+                    self._log(output_identity.serial, output_identity.secret, "warn", "command", message, {"command": command})
         return responses
 
     def enabled_output_names(self) -> list[str]:

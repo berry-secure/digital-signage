@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import Mock, patch
 
-from signaldeck_rpi.service_console import build_service_menu, summarize_status
+from signaldeck_rpi.service_console import ServiceConsole, build_service_menu, summarize_status
 
 
 class ServiceConsoleTest(unittest.TestCase):
@@ -57,6 +58,31 @@ class ServiceConsoleTest(unittest.TestCase):
         self.assertIn("HDMI-A-1: connected", text)
         self.assertIn("HDMI-A-2: disconnected", text)
         self.assertIn("CPU load: 0.23", text)
+
+    def test_console_does_not_stop_playback_if_tty_cannot_open(self):
+        pause_playback = Mock()
+        resume_playback = Mock()
+        console = ServiceConsole(None, pause_playback=pause_playback, resume_playback=resume_playback)
+
+        with patch("signaldeck_rpi.service_console.curses.wrapper", side_effect=RuntimeError("no tty")):
+            with self.assertRaises(RuntimeError):
+                console.run()
+
+        pause_playback.assert_not_called()
+        resume_playback.assert_not_called()
+
+    def test_console_always_resumes_playback_after_entering_tty(self):
+        pause_playback = Mock()
+        resume_playback = Mock()
+        console = ServiceConsole(None, pause_playback=pause_playback, resume_playback=resume_playback)
+        console._loop = Mock(side_effect=RuntimeError("boom"))
+
+        with patch("signaldeck_rpi.service_console.curses.wrapper", side_effect=lambda callback: callback(object())):
+            with self.assertRaises(RuntimeError):
+                console.run()
+
+        pause_playback.assert_called_once_with()
+        resume_playback.assert_called_once_with()
 
 
 if __name__ == "__main__":

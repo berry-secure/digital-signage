@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 import argparse
 import curses
+import subprocess
 
 from .webui import WebUiApp, create_provider
 
@@ -13,6 +15,14 @@ class ServiceMenuItem:
     key: str
     label: str
     action: str
+
+
+class ServicePlaybackController:
+    def pause(self) -> None:
+        _run(["systemctl", "stop", "signaldeck-agent.service"], allow_failure=True)
+
+    def resume(self) -> None:
+        _run(["systemctl", "restart", "signaldeck-agent.service"], allow_failure=True)
 
 
 def build_service_menu() -> list[ServiceMenuItem]:
@@ -62,13 +72,28 @@ def summarize_status(status: dict[str, Any]) -> list[str]:
 
 
 class ServiceConsole:
-    def __init__(self, app: WebUiApp):
+    def __init__(
+        self,
+        app: WebUiApp | None,
+        pause_playback: Callable[[], None] | None = None,
+        resume_playback: Callable[[], None] | None = None,
+    ):
+        controller = ServicePlaybackController()
         self.app = app
         self.menu = build_service_menu()
         self.message = "Ctrl+Alt+S opens this console. Choose action with arrows/Enter."
+        self.pause_playback = pause_playback or controller.pause
+        self.resume_playback = resume_playback or controller.resume
 
     def run(self) -> None:
-        curses.wrapper(self._loop)
+        def guarded_loop(screen) -> None:
+            self.pause_playback()
+            try:
+                self._loop(screen)
+            finally:
+                self.resume_playback()
+
+        curses.wrapper(guarded_loop)
 
     def _loop(self, screen) -> None:
         curses.curs_set(0)
@@ -150,6 +175,7 @@ class ServiceConsole:
         return False
 
     def _edit_cms(self, screen) -> str:
+        assert self.app is not None
         status = self.app.render_status_json()
         sync = status.get("sync") if isinstance(status.get("sync"), dict) else {}
         fields = {
@@ -161,6 +187,7 @@ class ServiceConsole:
         return self.app.save_config(fields)
 
     def _edit_wifi(self, screen) -> str:
+        assert self.app is not None
         fields = {
             "ssid": self._prompt(screen, "Wi-Fi SSID", ""),
             "password": self._prompt(screen, "Wi-Fi password", "", secret=True),
@@ -174,6 +201,7 @@ class ServiceConsole:
         return self.app.save_wifi(fields)
 
     def _edit_time(self, screen) -> str:
+        assert self.app is not None
         status = self.app.render_status_json()
         system = status.get("system") if isinstance(status.get("system"), dict) else {}
         fields = {
@@ -184,6 +212,7 @@ class ServiceConsole:
         return self.app.save_time(fields)
 
     def _update_player(self, screen) -> str:
+        assert self.app is not None
         ref = self._prompt(screen, "Git branch/ref", "codex/rpi-video-premium-player")
         return self.app.update_player({"ref": ref})
 
@@ -227,3 +256,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--boot-dir", default="/boot/firmware")
     args = parser.parse_args(argv)
     create_console(args.config, args.identity, args.state_root, args.boot_dir).run()
+
+
+def _run(command: list[str], allow_failure: bool = False) -> subprocess.CompletedProcess:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 and not allow_failure:
+        detail = (result.stderr or result.stdout or "command failed").strip()
+        raise RuntimeError(f"{' '.join(command)}: {detail}")
+    return result

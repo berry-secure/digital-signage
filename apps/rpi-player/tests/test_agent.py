@@ -58,6 +58,11 @@ class FakePlaybackController:
         return output in self.running
 
 
+class FailingAckCmsClient(FakeCmsClient):
+    def ack_command(self, command_id, serial, secret, status, message):
+        raise RuntimeError("database timeout")
+
+
 class FakeMediaCache(MediaCache):
     def __init__(self, root):
         super().__init__(root, 64)
@@ -152,6 +157,20 @@ class AgentRuntimeTest(unittest.TestCase):
             runtime.poll_once()
 
             self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1", "HDMI-A-2"])
+
+    def test_poll_once_continues_when_command_ack_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cms = FailingAckCmsClient()
+            runtime = self._runtime(root, cms)
+
+            with self.assertLogs("signaldeck.agent", level="WARNING") as logs:
+                responses = runtime.poll_once()
+
+            self.assertEqual(len(responses), 2)
+            self.assertEqual([payload["serial"] for payload in cms.sessions], ["MK5ABC123A", "MK5ABC123B"])
+            self.assertTrue(any(log[2] == "command" and "failed to ack" in log[3] for log in cms.logs))
+            self.assertTrue(any("failed to ack command" in line for line in logs.output))
 
     def _runtime(self, root: Path, cms=None, cache=None, playback=None):
         config = default_config()

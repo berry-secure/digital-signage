@@ -6,10 +6,8 @@ After=multi-user.target signaldeck-webui.service
 Type=simple
 WorkingDirectory=/opt/signaldeck/apps/rpi-player
 Environment=TERM=linux
-ExecStartPre=/usr/bin/systemctl stop signaldeck-agent.service
 ExecStartPre=-/usr/bin/chvt 1
 ExecStart=/opt/signaldeck/venv/bin/python -m signaldeck_service_console
-ExecStopPost=/usr/bin/systemctl restart signaldeck-agent.service
 StandardInput=tty-force
 StandardOutput=tty
 StandardError=tty
