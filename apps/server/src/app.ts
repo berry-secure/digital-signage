@@ -82,7 +82,7 @@ const mediaKinds = new Set(["video", "image", "audio"]);
 const playbackEventTypes = new Set(["audio", "visual"]);
 const playbackEventTriggerModes = new Set(["items", "minutes"]);
 const deviceLogSeverities = new Set(["info", "warn", "error"]);
-const proofOfPlayStatuses = new Set(["started", "finished", "error"]);
+const proofOfPlayStatuses = new Set(["started", "finished", "interrupted", "error"]);
 const playbackSourceTypes = new Set(["playlist", "event"]);
 
 export function resolveServerConfig(config: ServerConfig = {}) {
@@ -1032,8 +1032,8 @@ app.post("/api/player/logs", async (req, res) => {
 });
 
 app.post("/api/player/proof-of-play", async (req, res) => {
-  const serial = normalizeSerial(String(req.body?.serial || ""));
-  const secret = String(req.body?.secret || "").trim();
+  const serial = normalizeSerial(String(req.body?.serial || req.body?.deviceSerial || ""));
+  const secret = String(req.body?.secret || req.body?.deviceSecret || "").trim();
   const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
 
   if (!device) {
@@ -1041,9 +1041,9 @@ app.post("/api/player/proof-of-play", async (req, res) => {
     return;
   }
 
-  const status = normalizeProofOfPlayStatus(req.body?.status);
+  const status = normalizeProofOfPlayStatus(req.body?.status || req.body?.event || req.body?.state);
   if (!status) {
-    res.status(400).json({ message: "Proof of Play wymaga statusu started, finished albo error." });
+    res.status(400).json({ message: "Proof of Play wymaga statusu started, finished, interrupted albo error." });
     return;
   }
 
@@ -1535,6 +1535,7 @@ function presentDeviceLog(log) {
   const device = findById(database.devices, log.deviceId);
   const client = device?.clientId ? findById(database.clients, device.clientId) : null;
   const channel = device?.channelId ? findById(database.channels, device.channelId) : null;
+  const location = device?.locationId ? findById(database.locations, device.locationId) : null;
   return {
     ...log,
     severity: normalizeDeviceLogSeverity(log.severity),
@@ -1548,7 +1549,10 @@ function presentDeviceLog(log) {
     clientId: device?.clientId || "",
     clientName: client?.name || "",
     channelId: device?.channelId || "",
-    channelName: channel?.name || ""
+    channelName: channel?.name || "",
+    locationId: device?.locationId || "",
+    locationName: location?.name || "",
+    locationLabel: device?.locationLabel || ""
   };
 }
 
@@ -1556,6 +1560,7 @@ function presentProofOfPlay(entry) {
   const device = findById(database.devices, entry.deviceId);
   const client = device?.clientId ? findById(database.clients, device.clientId) : null;
   const channel = device?.channelId ? findById(database.channels, device.channelId) : null;
+  const location = device?.locationId ? findById(database.locations, device.locationId) : null;
   const media = entry.mediaId ? findById(database.media, entry.mediaId) : null;
 
   return {
@@ -1582,7 +1587,10 @@ function presentProofOfPlay(entry) {
     clientId: device?.clientId || "",
     clientName: client?.name || "",
     channelId: device?.channelId || "",
-    channelName: channel?.name || ""
+    channelName: channel?.name || "",
+    locationId: device?.locationId || "",
+    locationName: location?.name || "",
+    locationLabel: device?.locationLabel || ""
   };
 }
 

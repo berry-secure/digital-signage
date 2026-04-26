@@ -102,6 +102,11 @@ export function getOfflineDeviceAlerts(devices: DeviceRecord[], now = new Date()
 
 export function filterDeviceCenterDevices(devices: DeviceRecord[], filters: DeviceCenterFilters) {
   const query = filters.query.trim().toLowerCase();
+  const hasFilter = Boolean(filters.clientId || filters.locationId || filters.type || query);
+
+  if (!hasFilter) {
+    return [];
+  }
 
   return devices.filter((device) => {
     if (filters.clientId && device.clientId !== filters.clientId) {

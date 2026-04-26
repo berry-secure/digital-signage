@@ -96,18 +96,14 @@ describe("Device Center helpers", () => {
     });
   });
 
-  it("keeps the fleet global until a client, search, or product type filter is selected", () => {
+  it("keeps the device list hidden until a client, location, serial, or product type filter is selected", () => {
     const devices = [
       device({ id: "music-mini", name: "Audio Lite", clientId: "client-a", locationId: "loc-a", serial: "MKAUDIO001", playerType: "music_mini" }),
       device({ id: "video-standard", name: "Lobby TV", clientId: "client-a", locationId: "loc-b", serial: "MKTV001", playerType: "video_standard" }),
       device({ id: "video-premium", name: "Browser Preview", clientId: "client-b", locationId: "loc-c", serial: "MKWEB001", playerType: "video_premium" })
     ];
 
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", locationId: "", query: "", type: "" }).map((entry) => entry.id), [
-      "music-mini",
-      "video-standard",
-      "video-premium"
-    ]);
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", locationId: "", query: "", type: "" }).map((entry) => entry.id), []);
     assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", locationId: "", query: "", type: "" }).map((entry) => entry.id), [
       "music-mini",
       "video-standard"

@@ -2,6 +2,7 @@ import type { ProofOfPlayRecord, ProofOfPlayStatus } from "./types";
 
 export type ProofOfPlayFilters = {
   clientId: string;
+  locationId: string;
   deviceId: string;
   status: ProofOfPlayStatus | "";
   query: string;
@@ -11,6 +12,7 @@ export type ProofOfPlaySummary = {
   total: number;
   started: number;
   finished: number;
+  interrupted: number;
   error: number;
   uniqueDevices: number;
   uniqueMedia: number;
@@ -21,6 +23,7 @@ const csvHeaders = [
   "device",
   "serial",
   "client",
+  "location",
   "channel",
   "media",
   "source",
@@ -39,6 +42,9 @@ export function filterProofOfPlay(records: ProofOfPlayRecord[], filters: ProofOf
     if (filters.clientId && record.clientId !== filters.clientId) {
       return false;
     }
+    if (filters.locationId && record.locationId !== filters.locationId) {
+      return false;
+    }
     if (filters.deviceId && record.deviceId !== filters.deviceId) {
       return false;
     }
@@ -54,6 +60,8 @@ export function filterProofOfPlay(records: ProofOfPlayRecord[], filters: ProofOf
       record.deviceSerial,
       record.clientName,
       record.channelName,
+      record.locationName,
+      record.locationLabel,
       record.mediaTitle,
       record.mediaId,
       record.playlistId,
@@ -79,6 +87,8 @@ export function summarizeProofOfPlay(records: ProofOfPlayRecord[]): ProofOfPlayS
         summary.started += 1;
       } else if (record.status === "finished") {
         summary.finished += 1;
+      } else if (record.status === "interrupted") {
+        summary.interrupted += 1;
       } else {
         summary.error += 1;
       }
@@ -96,6 +106,7 @@ export function summarizeProofOfPlay(records: ProofOfPlayRecord[]): ProofOfPlayS
       total: 0,
       started: 0,
       finished: 0,
+      interrupted: 0,
       error: 0,
       uniqueDevices: 0,
       uniqueMedia: 0
@@ -109,6 +120,7 @@ export function buildProofOfPlayCsv(records: ProofOfPlayRecord[]) {
     record.deviceName,
     record.deviceSerial,
     record.clientName,
+    record.locationName || record.locationLabel,
     record.channelName,
     record.mediaTitle,
     record.sourceType,
