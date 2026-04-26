@@ -80,6 +80,7 @@ export function summarizeDatabase(database: any): MigrationSummary {
     raw: {
       users: count(database.users),
       clients: count(database.clients),
+      locations: count(database.locations),
       channels: count(database.channels),
       media: count(database.media),
       playlists: count(database.playlists),
@@ -94,6 +95,7 @@ export function summarizeDatabase(database: any): MigrationSummary {
     importable: {
       users: batches.users.length,
       clients: batches.clients.length,
+      locations: batches.locations.length,
       channels: batches.channels.length,
       media: batches.media.length,
       playlists: batches.playlists.length,

@@ -37,6 +37,12 @@ export interface UserRecord {
   email: string;
   name: string;
   role: UserRole;
+  clientIds: string[];
+  locationAccesses: Array<{
+    clientId: string;
+    allLocations: boolean;
+    locationIds: string[];
+  }>;
 }
 
 export interface ClientRecord {
@@ -48,6 +54,17 @@ export interface ClientRecord {
   updatedAt: string;
 }
 
+export interface LocationRecord {
+  id: string;
+  clientId: string;
+  name: string;
+  city: string;
+  address: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ChannelRecord {
   id: string;
   clientId: string;
@@ -55,6 +72,7 @@ export interface ChannelRecord {
   slug: string;
   description: string;
   orientation: "landscape" | "portrait";
+  locationIds: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -85,6 +103,7 @@ export interface PlaylistItemRecord {
   sortOrder: number;
   loopCount: number;
   volumePercent: number;
+  locationIds: string[];
   createdAt: string;
   updatedAt: string;
   media: MediaRecord | null;
@@ -148,6 +167,7 @@ export interface DeviceRecord {
   name: string;
   clientId: string;
   channelId: string;
+  locationId: string;
   locationLabel: string;
   notes: string;
   platform: string;
@@ -166,6 +186,7 @@ export interface DeviceRecord {
   updatedAt: string;
   clientName: string;
   channelName: string;
+  locationName: string;
   online: boolean;
 }
 
@@ -250,6 +271,7 @@ export interface BootstrapPayload {
   users: UserRecord[];
   installation: InstallationInfo;
   clients: ClientRecord[];
+  locations: LocationRecord[];
   channels: ChannelRecord[];
   media: MediaRecord[];
   playlists: PlaylistRecord[];

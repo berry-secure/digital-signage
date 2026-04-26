@@ -566,6 +566,176 @@ describe("MVP API contract", () => {
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
+
+  it("targets channels, playlist items, devices, and user access by client locations", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-locations-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "locations-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Locations Owner",
+      publicBaseUrl: "https://cms.example.test"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "locations-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Multi Site Client" });
+    const locationA = await request(isolatedApp)
+      .post("/api/locations")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Warszawa Centrum", city: "Warszawa" });
+    const locationB = await request(isolatedApp)
+      .post("/api/locations")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Kraków Galeria", city: "Kraków" });
+
+    assert.equal(locationA.status, 201);
+    assert.equal(locationB.status, 201);
+
+    const channel = await request(isolatedApp)
+      .post("/api/channels")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        name: "Menu Board",
+        locationIds: [locationA.body.location.id]
+      });
+    const media = await uploadTestMedia(isolatedApp, ownerToken, {
+      clientId: client.body.client.id,
+      title: "Local Promo",
+      kind: "video",
+      fileName: "promo.mp4",
+      mimeType: "video/mp4",
+      durationSeconds: 20
+    });
+    const playlist = await request(isolatedApp)
+      .post("/api/playlists")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        name: "Menu Playlist",
+        isActive: true,
+        notes: ""
+      });
+
+    await request(isolatedApp)
+      .post(`/api/playlists/${playlist.body.playlist.id}/items`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        mediaId: media.body.media.id,
+        sortOrder: 10,
+        loopCount: 1,
+        volumePercent: 80,
+        locationIds: [locationA.body.location.id]
+      });
+
+    const playerA = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKLOC0001",
+        secret: "loc-secret-a",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "waiting"
+      });
+    const playerB = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKLOC0002",
+        secret: "loc-secret-b",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "waiting"
+      });
+
+    await request(isolatedApp)
+      .post("/api/devices/approve")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        deviceId: playerA.body.device.id,
+        serial: "MKLOC0001",
+        name: "Warszawa Screen",
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        locationId: locationA.body.location.id,
+        playerType: "video_standard"
+      });
+    await request(isolatedApp)
+      .post("/api/devices/approve")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        deviceId: playerB.body.device.id,
+        serial: "MKLOC0002",
+        name: "Kraków Screen",
+        clientId: client.body.client.id,
+        channelId: channel.body.channel.id,
+        locationId: locationB.body.location.id,
+        playerType: "video_standard"
+      });
+
+    const sessionA = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKLOC0001",
+        secret: "loc-secret-a",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "idle"
+      });
+    const sessionB = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKLOC0002",
+        secret: "loc-secret-b",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "idle"
+      });
+
+    assert.equal(sessionA.body.playback.mode, "playlist");
+    assert.equal(sessionA.body.playback.queue[0].locationIds[0], locationA.body.location.id);
+    assert.equal(sessionB.body.playback.mode, "idle");
+
+    const manager = await request(isolatedApp)
+      .post("/api/users")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        email: "manager.locations@example.test",
+        password: "manager-password",
+        name: "Location Manager",
+        role: "manager",
+        clientIds: [client.body.client.id],
+        allLocations: false,
+        locationIds: [locationA.body.location.id]
+      });
+    assert.equal(manager.status, 201);
+    assert.deepEqual(manager.body.user.clientIds, [client.body.client.id]);
+    assert.equal(manager.body.user.locationAccesses[0].allLocations, false);
+
+    const managerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "manager.locations@example.test", password: "manager-password" });
+    const managerBootstrap = await request(isolatedApp)
+      .get("/api/bootstrap")
+      .set("Authorization", `Bearer ${managerLogin.body.token}`);
+
+    assert.deepEqual(managerBootstrap.body.locations.map((entry) => entry.id), [locationA.body.location.id]);
+    assert.deepEqual(managerBootstrap.body.devices.map((entry) => entry.id), [playerA.body.device.id]);
+    assert.equal(managerBootstrap.body.devices[0].locationName, "Warszawa Centrum");
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
 });
 
 function uploadTestMedia(
@@ -600,16 +770,21 @@ function createFakePrisma(calls: string[]) {
   const tables: Record<string, any[]> = {
     user: [],
     client: [],
+    userClient: [],
+    userLocationAccess: [],
     channel: [],
+    channelLocation: [],
     media: [],
     playlist: [],
     playlistItem: [],
+    playlistItemLocation: [],
     schedule: [],
     device: [],
     deviceCommand: [],
     playbackEvent: [],
     deviceLog: [],
-    proofOfPlay: []
+    proofOfPlay: [],
+    location: []
   };
 
   const model = (name: string) => ({
@@ -630,11 +805,15 @@ function createFakePrisma(calls: string[]) {
   return {
     user: model("user"),
     client: model("client"),
+    location: model("location"),
     userClient: model("userClient"),
+    userLocationAccess: model("userLocationAccess"),
     channel: model("channel"),
+    channelLocation: model("channelLocation"),
     media: model("media"),
     playlist: model("playlist"),
     playlistItem: model("playlistItem"),
+    playlistItemLocation: model("playlistItemLocation"),
     schedule: model("schedule"),
     device: model("device"),
     deviceCommand: model("deviceCommand"),
