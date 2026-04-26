@@ -63,6 +63,7 @@ model User {
   sessions       Session[]
   auditLogs      AuditLog[]
   deviceCommands DeviceCommand[]
+  locationAccess UserLocationAccess[]
 }
 
 model Client {
@@ -79,18 +80,52 @@ model Client {
   schedules  Schedule[]
   devices    Device[]
   events     PlaybackEvent[]
+  locations  Location[]
 }
 
 model UserClient {
   id        String   @id @default(uuid()) @db.Uuid
   userId    String   @db.Uuid
   clientId  String   @db.Uuid
+  allLocations Boolean @default(true)
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([userId, clientId])
   @@index([clientId])
+}
+
+model Location {
+  id        String   @id @default(uuid()) @db.Uuid
+  clientId  String   @db.Uuid
+  name      String
+  city      String   @default("")
+  address   String   @default("")
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channels  ChannelLocation[]
+  playlistItems PlaylistItemLocation[]
+  userAccess UserLocationAccess[]
+  devices   Device[]
+
+  @@index([clientId])
+}
+
+model UserLocationAccess {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  clientId  String   @db.Uuid
+  locationId String  @db.Uuid
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, locationId])
+  @@index([clientId])
+  @@index([locationId])
 }
 
 model Channel {
@@ -107,9 +142,22 @@ model Channel {
   schedules   Schedule[]
   devices     Device[]
   events      PlaybackEvent[]
+  locations   ChannelLocation[]
 
   @@unique([clientId, slug])
   @@index([clientId])
+}
+
+model ChannelLocation {
+  id        String   @id @default(uuid()) @db.Uuid
+  channelId String   @db.Uuid
+  locationId String  @db.Uuid
+  createdAt DateTime @default(now())
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, locationId])
+  @@index([locationId])
 }
 
 model Media {
@@ -166,9 +214,22 @@ model PlaylistItem {
   updatedAt     DateTime @updatedAt
   playlist      Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
   media         Media    @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  locations     PlaylistItemLocation[]
 
   @@index([playlistId, sortOrder])
   @@index([mediaId])
+}
+
+model PlaylistItemLocation {
+  id        String   @id @default(uuid()) @db.Uuid
+  playlistItemId String @db.Uuid
+  locationId String  @db.Uuid
+  createdAt DateTime @default(now())
+  playlistItem PlaylistItem @relation(fields: [playlistItemId], references: [id], onDelete: Cascade)
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([playlistItemId, locationId])
+  @@index([locationId])
 }
 
 model Schedule {
@@ -204,6 +265,7 @@ model Device {
   name                String               @default("Android TV")
   clientId            String?              @db.Uuid
   channelId           String?              @db.Uuid
+  locationId          String?              @db.Uuid
   locationLabel       String               @default("")
   notes               String               @default("")
   platform            String               @default("android")
@@ -222,6 +284,7 @@ model Device {
   updatedAt           DateTime             @updatedAt
   client              Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull)
   channel             Channel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  location            Location?            @relation(fields: [locationId], references: [id], onDelete: SetNull)
   commands            DeviceCommand[]
   logs                DeviceLog[]
   proofOfPlay         ProofOfPlay[]
@@ -229,6 +292,7 @@ model Device {
   @@index([approvalStatus])
   @@index([clientId])
   @@index([channelId])
+  @@index([locationId])
   @@index([lastSeenAt])
 }
 

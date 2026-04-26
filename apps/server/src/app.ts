@@ -242,6 +242,7 @@ app.post("/api/users", requireAuth, async (req, res) => {
   };
 
   database.users.unshift(user);
+  syncUserAccess(user.id, req.body);
   await persistDatabase();
   res.status(201).json({ user: sanitizeUser(user) });
 });
@@ -277,6 +278,7 @@ app.put("/api/users/:id", requireAuth, async (req, res) => {
     }
     user.passwordHash = hashPassword(nextPassword);
   }
+  syncUserAccess(user.id, req.body);
   touch(user);
   await persistDatabase();
   res.json({ user: sanitizeUser(user) });
@@ -299,6 +301,8 @@ app.delete("/api/users/:id", requireAuth, async (req, res) => {
   }
 
   database.users = database.users.filter((entry) => entry.id !== user.id);
+  database.userClients = database.userClients.filter((entry) => entry.userId !== user.id);
+  database.userLocationAccesses = database.userLocationAccesses.filter((entry) => entry.userId !== user.id);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -352,12 +356,18 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
 
   const channelIds = database.channels.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const playlistIds = database.playlists.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
+  const locationIds = database.locations.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const mediaToDelete = database.media.filter((entry) => entry.clientId === clientId);
   const resetDeviceIds = database.devices.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
 
   database.clients = database.clients.filter((entry) => entry.id !== clientId);
+  database.locations = database.locations.filter((entry) => entry.clientId !== clientId);
+  database.userClients = database.userClients.filter((entry) => entry.clientId !== clientId);
+  database.userLocationAccesses = database.userLocationAccesses.filter((entry) => entry.clientId !== clientId);
+  database.channelLocations = database.channelLocations.filter((entry) => !locationIds.includes(entry.locationId));
   database.channels = database.channels.filter((entry) => entry.clientId !== clientId);
   database.playlists = database.playlists.filter((entry) => entry.clientId !== clientId);
+  database.playlistItemLocations = database.playlistItemLocations.filter((entry) => !locationIds.includes(entry.locationId));
   database.playlistItems = database.playlistItems.filter((entry) => !playlistIds.includes(entry.playlistId));
   database.schedules = database.schedules.filter((entry) => entry.clientId !== clientId);
   database.devices = database.devices.map((entry) =>
@@ -367,6 +377,7 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
           approvalStatus: "pending",
           clientId: "",
           channelId: "",
+          locationId: "",
           locationLabel: "",
           desiredDisplayState: "active",
           notes: ""
@@ -383,6 +394,64 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/locations", requireAuth, async (req, res) => {
+  const location = buildLocationRecord(req.body);
+  const validationError = validateLocation(location);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
+    return;
+  }
+
+  database.locations.unshift(location);
+  await persistDatabase();
+  res.status(201).json({ location });
+});
+
+app.put("/api/locations/:id", requireAuth, async (req, res) => {
+  const location = findById(database.locations, req.params.id);
+  if (!location) {
+    res.status(404).json({ message: "Nie znaleziono lokalizacji." });
+    return;
+  }
+
+  const nextLocation = buildLocationRecord(req.body, location);
+  const validationError = validateLocation(nextLocation);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
+    return;
+  }
+
+  Object.assign(location, nextLocation);
+  touch(location);
+  await persistDatabase();
+  res.json({ location });
+});
+
+app.delete("/api/locations/:id", requireAuth, async (req, res) => {
+  const location = findById(database.locations, req.params.id);
+  if (!location) {
+    res.status(404).json({ message: "Nie znaleziono lokalizacji." });
+    return;
+  }
+
+  database.locations = database.locations.filter((entry) => entry.id !== location.id);
+  database.channelLocations = database.channelLocations.filter((entry) => entry.locationId !== location.id);
+  database.playlistItemLocations = database.playlistItemLocations.filter((entry) => entry.locationId !== location.id);
+  database.userLocationAccesses = database.userLocationAccesses.filter((entry) => entry.locationId !== location.id);
+  database.devices = database.devices.map((entry) =>
+    entry.locationId === location.id
+      ? {
+          ...entry,
+          locationId: "",
+          locationLabel: "",
+          updatedAt: nowIso()
+        }
+      : entry
+  );
+  await persistDatabase();
+  res.json({ ok: true });
+});
+
 app.post("/api/channels", requireAuth, async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const clientId = String(req.body?.clientId || "").trim();
@@ -393,6 +462,11 @@ app.post("/api/channels", requireAuth, async (req, res) => {
 
   if (!findById(database.clients, clientId)) {
     res.status(400).json({ message: "Wybrany klient nie istnieje." });
+    return;
+  }
+  const locationIds = normalizeLocationIds(req.body?.locationIds, clientId);
+  if (!locationsBelongToClient(locationIds, clientId)) {
+    res.status(400).json({ message: "Lokalizacje kanału muszą należeć do tego klienta." });
     return;
   }
 
@@ -408,8 +482,9 @@ app.post("/api/channels", requireAuth, async (req, res) => {
   };
 
   database.channels.unshift(channel);
+  syncChannelLocations(channel.id, locationIds);
   await persistDatabase();
-  res.status(201).json({ channel });
+  res.status(201).json({ channel: presentChannel(channel) });
 });
 
 app.put("/api/channels/:id", requireAuth, async (req, res) => {
@@ -424,6 +499,11 @@ app.put("/api/channels/:id", requireAuth, async (req, res) => {
     res.status(400).json({ message: "Wybrany klient nie istnieje." });
     return;
   }
+  const locationIds = normalizeLocationIds(req.body?.locationIds, nextClientId, getChannelLocationIds(channel.id));
+  if (!locationsBelongToClient(locationIds, nextClientId)) {
+    res.status(400).json({ message: "Lokalizacje kanału muszą należeć do tego klienta." });
+    return;
+  }
 
   channel.clientId = nextClientId;
   channel.name = String(req.body?.name || channel.name).trim() || channel.name;
@@ -433,14 +513,16 @@ app.put("/api/channels/:id", requireAuth, async (req, res) => {
   );
   channel.description = String(req.body?.description || channel.description).trim();
   channel.orientation = req.body?.orientation === "portrait" ? "portrait" : "landscape";
+  syncChannelLocations(channel.id, locationIds);
   touch(channel);
   await persistDatabase();
-  res.json({ channel });
+  res.json({ channel: presentChannel(channel) });
 });
 
 app.delete("/api/channels/:id", requireAuth, async (req, res) => {
   const channelId = req.params.id;
   database.channels = database.channels.filter((entry) => entry.id !== channelId);
+  database.channelLocations = database.channelLocations.filter((entry) => entry.channelId !== channelId);
   database.playlists = database.playlists.map((entry) =>
     entry.channelId === channelId ? { ...entry, channelId: "", updatedAt: nowIso() } : entry
   );
@@ -612,6 +694,11 @@ app.post("/api/playlists/:id/items", requireAuth, async (req, res) => {
     res.status(400).json({ message: "Wybierz istniejące media." });
     return;
   }
+  const locationIds = normalizeLocationIds(req.body?.locationIds, playlist.clientId);
+  if (!locationsBelongToClient(locationIds, playlist.clientId)) {
+    res.status(400).json({ message: "Lokalizacje pozycji playlisty muszą należeć do klienta playlisty." });
+    return;
+  }
 
   const existingItems = database.playlistItems.filter((entry) => entry.playlistId === playlist.id);
   const playlistItem = {
@@ -626,8 +713,9 @@ app.post("/api/playlists/:id/items", requireAuth, async (req, res) => {
   };
 
   database.playlistItems.push(playlistItem);
+  syncPlaylistItemLocations(playlistItem.id, locationIds);
   await persistDatabase();
-  res.status(201).json({ playlistItem });
+  res.status(201).json({ playlistItem: presentPlaylistItem(playlistItem) });
 });
 
 app.put("/api/playlists/:playlistId/items/:itemId", requireAuth, async (req, res) => {
@@ -636,18 +724,30 @@ app.put("/api/playlists/:playlistId/items/:itemId", requireAuth, async (req, res
     res.status(404).json({ message: "Nie znaleziono elementu playlisty." });
     return;
   }
+  const playlist = findById(database.playlists, item.playlistId);
+  const locationIds = normalizeLocationIds(
+    req.body?.locationIds,
+    playlist?.clientId || "",
+    getPlaylistItemLocationIds(item.id)
+  );
+  if (!playlist || !locationsBelongToClient(locationIds, playlist.clientId)) {
+    res.status(400).json({ message: "Lokalizacje pozycji playlisty muszą należeć do klienta playlisty." });
+    return;
+  }
 
   item.mediaId = String(req.body?.mediaId || item.mediaId).trim() || item.mediaId;
   item.sortOrder = Number(req.body?.sortOrder || item.sortOrder) || item.sortOrder;
   item.loopCount = Number(req.body?.loopCount || item.loopCount) || item.loopCount;
   item.volumePercent = Number(req.body?.volumePercent || item.volumePercent) || item.volumePercent;
+  syncPlaylistItemLocations(item.id, locationIds);
   touch(item);
   await persistDatabase();
-  res.json({ playlistItem: item });
+  res.json({ playlistItem: presentPlaylistItem(item) });
 });
 
 app.delete("/api/playlists/:playlistId/items/:itemId", requireAuth, async (req, res) => {
   database.playlistItems = database.playlistItems.filter((entry) => entry.id !== req.params.itemId);
+  database.playlistItemLocations = database.playlistItemLocations.filter((entry) => entry.playlistItemId !== req.params.itemId);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -696,13 +796,20 @@ app.post("/api/devices/approve", requireAuth, async (req, res) => {
     res.status(400).json({ message: "Wybierz poprawnego klienta i kanał." });
     return;
   }
+  const locationId = String(req.body?.locationId || "").trim();
+  const location = locationId ? findById(database.locations, locationId) : null;
+  if (locationId && (!location || location.clientId !== clientId)) {
+    res.status(400).json({ message: "Lokalizacja urządzenia musi należeć do wybranego klienta." });
+    return;
+  }
 
   device.approvalStatus = "approved";
   device.name = String(req.body?.name || device.name || `Ekran ${device.serial}`).trim() || `Ekran ${device.serial}`;
   device.clientId = clientId;
   device.channelId = channelId;
+  device.locationId = locationId;
   device.playerType = normalizeDevicePlayerType(req.body?.playerType || device.playerType);
-  device.locationLabel = String(req.body?.locationLabel || device.locationLabel || device.name).trim();
+  device.locationLabel = String(req.body?.locationLabel || location?.name || device.locationLabel || device.name).trim();
   device.notes = String(req.body?.notes || device.notes || "").trim();
   device.desiredDisplayState = req.body?.desiredDisplayState === "blackout" ? "blackout" : "active";
   device.volumePercent = clampNumber(Number(req.body?.volumePercent || device.volumePercent || 80), 0, 100);
@@ -721,8 +828,15 @@ app.put("/api/devices/:id", requireAuth, async (req, res) => {
   device.name = String(req.body?.name || device.name).trim() || device.name;
   device.clientId = String(req.body?.clientId || device.clientId).trim();
   device.channelId = String(req.body?.channelId || device.channelId).trim();
+  const locationId = String(req.body?.locationId ?? device.locationId ?? "").trim();
+  const location = locationId ? findById(database.locations, locationId) : null;
+  if (locationId && (!location || location.clientId !== device.clientId)) {
+    res.status(400).json({ message: "Lokalizacja urządzenia musi należeć do wybranego klienta." });
+    return;
+  }
+  device.locationId = locationId;
   device.playerType = normalizeDevicePlayerType(req.body?.playerType || device.playerType);
-  device.locationLabel = String(req.body?.locationLabel || device.locationLabel).trim();
+  device.locationLabel = String(req.body?.locationLabel || location?.name || device.locationLabel).trim();
   device.notes = String(req.body?.notes || device.notes).trim();
   device.desiredDisplayState = req.body?.desiredDisplayState === "blackout" ? "blackout" : "active";
   device.volumePercent = clampNumber(Number(req.body?.volumePercent || device.volumePercent || 80), 0, 100);
@@ -787,6 +901,7 @@ app.post("/api/devices/:id/reset", requireAuth, async (req, res) => {
   device.approvalStatus = "pending";
   device.clientId = "";
   device.channelId = "";
+  device.locationId = "";
   device.locationLabel = "";
   device.desiredDisplayState = "active";
   database.deviceCommands = database.deviceCommands.filter((entry) => entry.deviceId !== device.id);
@@ -822,6 +937,7 @@ app.post("/api/player/session", async (req, res) => {
       name: "Android TV",
       clientId: "",
       channelId: "",
+      locationId: "",
       locationLabel: "",
       notes: "",
       platform: String(req.body?.platform || "android").trim() || "android",
@@ -1011,6 +1127,7 @@ app.post("/api/player/reset", async (req, res) => {
   device.approvalStatus = "pending";
   device.clientId = "";
   device.channelId = "";
+  device.locationId = "";
   device.locationLabel = "";
   device.desiredDisplayState = "active";
   device.playerState = "waiting";
@@ -1087,6 +1204,7 @@ function requireUserManagementPermission(req, res) {
 
 function buildBootstrapPayload(req) {
   const baseUrl = getRequestBaseUrl(req);
+  const scope = buildUserScope(req.user);
   return {
     user: sanitizeUser(req.user),
     users: [...database.users].sort((left, right) =>
@@ -1102,18 +1220,45 @@ function buildBootstrapPayload(req) {
       databaseConfigured: Boolean(databaseUrl),
       dataDir
     },
-    clients: [...database.clients].sort(sortByName),
-    channels: [...database.channels].sort(sortByName),
-    media: [...database.media].sort(sortByUpdatedDesc).map((entry) => enrichMedia(entry, baseUrl)),
-    playlists: buildPlaylistViews(),
-    schedules: [...database.schedules].sort(sortByPriorityDesc),
-    devices: [...database.devices].sort(sortDevices).map((entry) => presentDevice(entry)),
-    deviceCommands: [...database.deviceCommands].sort(sortByUpdatedDesc).slice(0, 250).map((entry) => presentDeviceCommand(entry)),
+    clients: [...database.clients].filter((entry) => scope.canSeeClient(entry.id)).sort(sortByName),
+    locations: [...database.locations]
+      .filter((entry) => scope.canSeeLocation(entry.clientId, entry.id))
+      .sort(sortByName),
+    channels: [...database.channels]
+      .filter((entry) => scope.canSeeClient(entry.clientId) && scope.canSeeTargetedRecord(entry.clientId, getChannelLocationIds(entry.id)))
+      .sort(sortByName)
+      .map(presentChannel),
+    media: [...database.media]
+      .filter((entry) => scope.canSeeClient(entry.clientId))
+      .sort(sortByUpdatedDesc)
+      .map((entry) => enrichMedia(entry, baseUrl)),
+    playlists: buildPlaylistViews(scope),
+    schedules: [...database.schedules]
+      .filter((entry) => scope.canSeeClient(entry.clientId))
+      .sort(sortByPriorityDesc),
+    devices: [...database.devices]
+      .filter((entry) => scope.canSeeDevice(entry))
+      .sort(sortDevices)
+      .map((entry) => presentDevice(entry)),
+    deviceCommands: [...database.deviceCommands]
+      .filter((entry) => scope.canSeeDevice(findById(database.devices, entry.deviceId)))
+      .sort(sortByUpdatedDesc)
+      .slice(0, 250)
+      .map((entry) => presentDeviceCommand(entry)),
     playbackEvents: [...database.playbackEvents]
+      .filter((entry) => scope.canSeeClient(entry.clientId))
       .sort(sortPlaybackEvents)
       .map((entry) => presentPlaybackEvent(entry, baseUrl)),
-    deviceLogs: [...database.deviceLogs].sort(sortByCreatedDesc).slice(0, 250).map((entry) => presentDeviceLog(entry)),
-    proofOfPlay: [...database.proofOfPlay].sort(sortProofOfPlayDesc).slice(0, 1000).map((entry) => presentProofOfPlay(entry))
+    deviceLogs: [...database.deviceLogs]
+      .filter((entry) => scope.canSeeDevice(findById(database.devices, entry.deviceId)))
+      .sort(sortByCreatedDesc)
+      .slice(0, 250)
+      .map((entry) => presentDeviceLog(entry)),
+    proofOfPlay: [...database.proofOfPlay]
+      .filter((entry) => scope.canSeeDevice(findById(database.devices, entry.deviceId)))
+      .sort(sortProofOfPlayDesc)
+      .slice(0, 1000)
+      .map((entry) => presentProofOfPlay(entry))
   };
 }
 
@@ -1124,7 +1269,8 @@ function buildPlaybackPayload(device, req) {
       (entry) =>
         entry.clientId === device.clientId &&
         entry.isActive &&
-        (!entry.channelId || entry.channelId === device.channelId)
+        (!entry.channelId || entry.channelId === device.channelId) &&
+        channelTargetsDevice(device.channelId, device.locationId)
     )
     .sort(sortByName);
 
@@ -1147,7 +1293,7 @@ function buildPlaybackPayload(device, req) {
     };
   }
 
-  const queue = buildPlaylistQueue(resolvedPlaylist.id, baseUrl, activeSchedule?.id || "");
+  const queue = buildPlaylistQueue(resolvedPlaylist.id, baseUrl, activeSchedule?.id || "", device.locationId || "");
   if (!queue.length) {
     return {
       mode: "idle",
@@ -1179,9 +1325,10 @@ function emptyPlayback() {
   };
 }
 
-function buildPlaylistQueue(playlistId, baseUrl, scheduleId = "") {
+function buildPlaylistQueue(playlistId, baseUrl, scheduleId = "", locationId = "") {
   return database.playlistItems
     .filter((entry) => entry.playlistId === playlistId)
+    .filter((entry) => targetLocationsInclude(getPlaylistItemLocationIds(entry.id), locationId))
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .flatMap((entry) => {
       const media = findById(database.media, entry.mediaId);
@@ -1204,7 +1351,8 @@ function buildPlaylistQueue(playlistId, baseUrl, scheduleId = "") {
         hasAudio: Boolean(media.hasAudio || media.kind === "audio"),
         checksum: media.checksum || "",
         contentVersion: Number(media.contentVersion || 1) || 1,
-        sourceType: "playlist"
+        sourceType: "playlist",
+        locationIds: getPlaylistItemLocationIds(entry.id)
       }));
     });
 }
@@ -1304,32 +1452,49 @@ function shouldInsertPlaybackEvent(event, playedItems, elapsedSeconds, nextMinut
   return true;
 }
 
-function buildPlaylistViews() {
+function buildPlaylistViews(scope = null) {
   return [...database.playlists]
+    .filter((playlist) => !scope || scope.canSeeClient(playlist.clientId))
     .sort(sortByName)
     .map((playlist) => ({
       ...playlist,
       items: database.playlistItems
         .filter((entry) => entry.playlistId === playlist.id)
+        .filter((entry) => !scope || scope.canSeeTargetedRecord(playlist.clientId, getPlaylistItemLocationIds(entry.id)))
         .sort((left, right) => left.sortOrder - right.sortOrder)
-        .map((entry) => ({
-          ...entry,
-          media: findById(database.media, entry.mediaId) || null
-        }))
+        .map(presentPlaylistItem)
     }));
+}
+
+function presentPlaylistItem(entry) {
+  return {
+    ...entry,
+    locationIds: getPlaylistItemLocationIds(entry.id),
+    media: findById(database.media, entry.mediaId) || null
+  };
+}
+
+function presentChannel(channel) {
+  return {
+    ...channel,
+    locationIds: getChannelLocationIds(channel.id)
+  };
 }
 
 function presentDevice(device) {
   const client = device.clientId ? findById(database.clients, device.clientId) : null;
   const channel = device.channelId ? findById(database.channels, device.channelId) : null;
+  const location = device.locationId ? findById(database.locations, device.locationId) : null;
   const lastSeenValue = device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0;
   const isOnline = lastSeenValue > 0 && Date.now() - lastSeenValue < 90_000;
 
   return {
     ...device,
     playerType: normalizeDevicePlayerType(device.playerType),
+    locationId: device.locationId || "",
     clientName: client?.name || "",
     channelName: channel?.name || "",
+    locationName: location?.name || device.locationLabel || "",
     online: isOnline
   };
 }
@@ -1449,6 +1614,166 @@ function findDevice(deviceId, serial) {
   }
 
   return null;
+}
+
+function buildLocationRecord(body, current = null) {
+  return {
+    id: current?.id || randomUUID(),
+    clientId: String(body?.clientId || current?.clientId || "").trim(),
+    name: String(body?.name || current?.name || "").trim(),
+    city: String(body?.city ?? current?.city ?? "").trim(),
+    address: String(body?.address ?? current?.address ?? "").trim(),
+    notes: String(body?.notes ?? current?.notes ?? "").trim(),
+    createdAt: current?.createdAt || nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+function validateLocation(location) {
+  if (!location.clientId || !findById(database.clients, location.clientId)) {
+    return "Lokalizacja wymaga poprawnego klienta.";
+  }
+
+  if (!location.name) {
+    return "Lokalizacja wymaga nazwy.";
+  }
+
+  return "";
+}
+
+function normalizeLocationIds(value, clientId, fallback = []) {
+  if (value === undefined) {
+    return [...fallback];
+  }
+
+  const source = Array.isArray(value) ? value : String(value || "").split(",");
+  const seen = new Set();
+  return source
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .filter((entry) => {
+      if (seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    })
+    .filter((entry) => {
+      const location = findById(database.locations, entry);
+      return Boolean(location && (!clientId || location.clientId === clientId));
+    });
+}
+
+function locationsBelongToClient(locationIds, clientId) {
+  return locationIds.every((locationId) => {
+    const location = findById(database.locations, locationId);
+    return Boolean(location && location.clientId === clientId);
+  });
+}
+
+function syncChannelLocations(channelId, locationIds) {
+  database.channelLocations = database.channelLocations.filter((entry) => entry.channelId !== channelId);
+  database.channelLocations.push(
+    ...locationIds.map((locationId) => ({
+      id: randomUUID(),
+      channelId,
+      locationId,
+      createdAt: nowIso()
+    }))
+  );
+}
+
+function syncPlaylistItemLocations(playlistItemId, locationIds) {
+  database.playlistItemLocations = database.playlistItemLocations.filter((entry) => entry.playlistItemId !== playlistItemId);
+  database.playlistItemLocations.push(
+    ...locationIds.map((locationId) => ({
+      id: randomUUID(),
+      playlistItemId,
+      locationId,
+      createdAt: nowIso()
+    }))
+  );
+}
+
+function getChannelLocationIds(channelId) {
+  return database.channelLocations
+    .filter((entry) => entry.channelId === channelId)
+    .map((entry) => entry.locationId);
+}
+
+function getPlaylistItemLocationIds(playlistItemId) {
+  return database.playlistItemLocations
+    .filter((entry) => entry.playlistItemId === playlistItemId)
+    .map((entry) => entry.locationId);
+}
+
+function targetLocationsInclude(targetLocationIds, locationId) {
+  return !targetLocationIds.length || Boolean(locationId && targetLocationIds.includes(locationId));
+}
+
+function channelTargetsDevice(channelId, locationId) {
+  if (!channelId) {
+    return true;
+  }
+
+  return targetLocationsInclude(getChannelLocationIds(channelId), locationId || "");
+}
+
+function syncUserAccess(userId, body) {
+  const user = findById(database.users, userId);
+  if (!user || user.role === "owner") {
+    database.userClients = database.userClients.filter((entry) => entry.userId !== userId);
+    database.userLocationAccesses = database.userLocationAccesses.filter((entry) => entry.userId !== userId);
+    return;
+  }
+
+  const clientIds = normalizeClientIds(body?.clientIds);
+  const allLocations = body?.allLocations !== false;
+  database.userClients = database.userClients.filter((entry) => entry.userId !== userId);
+  database.userLocationAccesses = database.userLocationAccesses.filter((entry) => entry.userId !== userId);
+  database.userClients.push(
+    ...clientIds.map((clientId) => ({
+      id: randomUUID(),
+      userId,
+      clientId,
+      allLocations,
+      createdAt: nowIso()
+    }))
+  );
+
+  if (allLocations) {
+    return;
+  }
+
+  const locationIds = normalizeLocationIds(body?.locationIds, "", []);
+  database.userLocationAccesses.push(
+    ...locationIds
+      .map((locationId) => findById(database.locations, locationId))
+      .filter((location) => location && clientIds.includes(location.clientId))
+      .map((location) => ({
+        id: randomUUID(),
+        userId,
+        clientId: location.clientId,
+        locationId: location.id,
+        createdAt: nowIso()
+      }))
+  );
+}
+
+function normalizeClientIds(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(",");
+  const seen = new Set();
+  return source
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .filter((entry) => {
+      if (seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    })
+    .filter((entry) => Boolean(findById(database.clients, entry)));
 }
 
 function buildScheduleRecord(body, current = null) {
@@ -1721,12 +2046,75 @@ function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function buildUserScope(user) {
+  const isOwner = user?.role === "owner";
+  const clientAccess = database.userClients.filter((entry) => entry.userId === user?.id);
+  const clientIds = new Set(clientAccess.map((entry) => entry.clientId));
+  const allLocationClientIds = new Set(clientAccess.filter((entry) => entry.allLocations !== false).map((entry) => entry.clientId));
+  const allowedLocationIds = new Set(
+    database.userLocationAccesses
+      .filter((entry) => entry.userId === user?.id)
+      .map((entry) => entry.locationId)
+  );
+
+  const canSeeClient = (clientId) => isOwner || clientIds.has(clientId);
+  const canSeeLocation = (clientId, locationId) =>
+    isOwner || (clientIds.has(clientId) && (allLocationClientIds.has(clientId) || allowedLocationIds.has(locationId)));
+
+  return {
+    isOwner,
+    canSeeClient,
+    canSeeLocation,
+    canSeeTargetedRecord(clientId, locationIds) {
+      if (isOwner) {
+        return true;
+      }
+      if (!clientIds.has(clientId)) {
+        return false;
+      }
+      if (allLocationClientIds.has(clientId)) {
+        return true;
+      }
+      return locationIds.length === 0 || locationIds.some((locationId) => allowedLocationIds.has(locationId));
+    },
+    canSeeDevice(device) {
+      if (!device) {
+        return false;
+      }
+      if (isOwner) {
+        return true;
+      }
+      if (!device.clientId || !clientIds.has(device.clientId)) {
+        return false;
+      }
+      if (allLocationClientIds.has(device.clientId)) {
+        return true;
+      }
+      return Boolean(device.locationId && allowedLocationIds.has(device.locationId));
+    }
+  };
+}
+
 function sanitizeUser(user) {
+  const userClients = database?.userClients?.filter((entry) => entry.userId === user.id) || [];
+  const locationAccesses = userClients.map((entry) => ({
+    clientId: entry.clientId,
+    allLocations: entry.allLocations !== false,
+    locationIds:
+      entry.allLocations === false
+        ? (database?.userLocationAccesses || [])
+            .filter((access) => access.userId === user.id && access.clientId === entry.clientId)
+            .map((access) => access.locationId)
+        : []
+  }));
+
   return {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role
+    role: user.role,
+    clientIds: userClients.map((entry) => entry.clientId),
+    locationAccesses
   };
 }
 
@@ -1791,10 +2179,15 @@ async function loadDatabase() {
     return {
       users: Array.isArray(parsed.users) ? parsed.users : [],
       clients: Array.isArray(parsed.clients) ? parsed.clients : [],
+      locations: Array.isArray(parsed.locations) ? parsed.locations : [],
+      userClients: Array.isArray(parsed.userClients) ? parsed.userClients : [],
+      userLocationAccesses: Array.isArray(parsed.userLocationAccesses) ? parsed.userLocationAccesses : [],
+      channelLocations: Array.isArray(parsed.channelLocations) ? parsed.channelLocations : [],
       channels: Array.isArray(parsed.channels) ? parsed.channels : [],
       media: Array.isArray(parsed.media) ? parsed.media : [],
       playlists: Array.isArray(parsed.playlists) ? parsed.playlists : [],
       playlistItems: Array.isArray(parsed.playlistItems) ? parsed.playlistItems : [],
+      playlistItemLocations: Array.isArray(parsed.playlistItemLocations) ? parsed.playlistItemLocations : [],
       schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
       devices: Array.isArray(parsed.devices) ? parsed.devices : [],
       deviceCommands: Array.isArray(parsed.deviceCommands) ? parsed.deviceCommands : [],
@@ -1806,10 +2199,15 @@ async function loadDatabase() {
     const initial = {
       users: [],
       clients: [],
+      locations: [],
+      userClients: [],
+      userLocationAccesses: [],
+      channelLocations: [],
       channels: [],
       media: [],
       playlists: [],
       playlistItems: [],
+      playlistItemLocations: [],
       schedules: [],
       devices: [],
       deviceCommands: [],

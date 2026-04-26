@@ -63,6 +63,7 @@ describe("Device Center helpers", () => {
       name: "Lobby",
       clientId: "client-1",
       channelId: "channel-1",
+      locationId: "location-1",
       playerType: "video_standard",
       locationLabel: "Recepcja",
       notes: "Test notes",
@@ -74,6 +75,7 @@ describe("Device Center helpers", () => {
       name: "Lobby",
       clientId: "client-1",
       channelId: "channel-1",
+      locationId: "location-1",
       playerType: "video_standard",
       locationLabel: "Recepcja",
       notes: "Test notes",
@@ -85,6 +87,7 @@ describe("Device Center helpers", () => {
       name: "Lobby",
       clientId: "client-1",
       channelId: "channel-1",
+      locationId: "location-1",
       playerType: "video_standard",
       locationLabel: "Recepcja",
       notes: "Test notes",
@@ -95,25 +98,28 @@ describe("Device Center helpers", () => {
 
   it("keeps the fleet global until a client, search, or product type filter is selected", () => {
     const devices = [
-      device({ id: "music-mini", name: "Audio Lite", clientId: "client-a", serial: "MKAUDIO001", playerType: "music_mini" }),
-      device({ id: "video-standard", name: "Lobby TV", clientId: "client-a", serial: "MKTV001", playerType: "video_standard" }),
-      device({ id: "video-premium", name: "Browser Preview", clientId: "client-b", serial: "MKWEB001", playerType: "video_premium" })
+      device({ id: "music-mini", name: "Audio Lite", clientId: "client-a", locationId: "loc-a", serial: "MKAUDIO001", playerType: "music_mini" }),
+      device({ id: "video-standard", name: "Lobby TV", clientId: "client-a", locationId: "loc-b", serial: "MKTV001", playerType: "video_standard" }),
+      device({ id: "video-premium", name: "Browser Preview", clientId: "client-b", locationId: "loc-c", serial: "MKWEB001", playerType: "video_premium" })
     ];
 
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", query: "", type: "" }).map((entry) => entry.id), [
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", locationId: "", query: "", type: "" }).map((entry) => entry.id), [
       "music-mini",
       "video-standard",
       "video-premium"
     ]);
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", query: "", type: "" }).map((entry) => entry.id), [
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", locationId: "", query: "", type: "" }).map((entry) => entry.id), [
       "music-mini",
       "video-standard"
     ]);
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", query: "preview", type: "" }).map((entry) => entry.id), [
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "", locationId: "", query: "preview", type: "" }).map((entry) => entry.id), [
       "video-premium"
     ]);
-    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", query: "", type: "music_mini" }).map((entry) => entry.id), [
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", locationId: "", query: "", type: "music_mini" }).map((entry) => entry.id), [
       "music-mini"
+    ]);
+    assert.deepEqual(filterDeviceCenterDevices(devices, { clientId: "client-a", locationId: "loc-b", query: "", type: "" }).map((entry) => entry.id), [
+      "video-standard"
     ]);
   });
 
@@ -151,6 +157,7 @@ function device(overrides: Partial<DeviceRecord> = {}): DeviceRecord {
     name: "Android TV",
     clientId: "client-1",
     channelId: "channel-1",
+    locationId: "",
     locationLabel: "",
     notes: "",
     platform: "android",
@@ -169,6 +176,7 @@ function device(overrides: Partial<DeviceRecord> = {}): DeviceRecord {
     updatedAt: "2026-04-25T00:00:00.000Z",
     clientName: "Client",
     channelName: "Channel",
+    locationName: "",
     online: false,
     ...overrides
   };

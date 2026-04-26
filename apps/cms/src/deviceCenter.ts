@@ -6,6 +6,7 @@ export type DeviceType = DevicePlayerType;
 
 export type DeviceCenterFilters = {
   clientId: string;
+  locationId: string;
   query: string;
   type: DeviceType | "";
 };
@@ -107,6 +108,10 @@ export function filterDeviceCenterDevices(devices: DeviceRecord[], filters: Devi
       return false;
     }
 
+    if (filters.locationId && device.locationId !== filters.locationId) {
+      return false;
+    }
+
     if (filters.type && getDeviceType(device) !== filters.type) {
       return false;
     }
@@ -120,6 +125,7 @@ export function filterDeviceCenterDevices(devices: DeviceRecord[], filters: Devi
       device.serial,
       device.clientName,
       device.channelName,
+      device.locationName,
       device.locationLabel,
       device.platform,
       device.deviceModel,
@@ -148,6 +154,7 @@ export function buildDeviceQuickUpdate(device: DeviceRecord, action: DeviceQuick
     name: device.name,
     clientId: device.clientId,
     channelId: device.channelId,
+    locationId: device.locationId,
     playerType: getDeviceType(device),
     locationLabel: device.locationLabel,
     notes: device.notes,

@@ -77,7 +77,15 @@ export async function fetchBootstrap(token: string) {
 
 export async function createUser(
   token: string,
-  payload: { email: string; password: string; name: string; role: string }
+  payload: {
+    email: string;
+    password: string;
+    name: string;
+    role: string;
+    clientIds?: string[];
+    allLocations?: boolean;
+    locationIds?: string[];
+  }
 ) {
   return requestJson<{ user: BootstrapPayload["users"][number] }>("/api/users", {
     method: "POST",
@@ -89,7 +97,15 @@ export async function createUser(
 export async function updateUser(
   token: string,
   userId: string,
-  payload: { email: string; password?: string; name: string; role: string }
+  payload: {
+    email: string;
+    password?: string;
+    name: string;
+    role: string;
+    clientIds?: string[];
+    allLocations?: boolean;
+    locationIds?: string[];
+  }
 ) {
   return requestJson<{ user: BootstrapPayload["users"][number] }>(`/api/users/${userId}`, {
     method: "PUT",
@@ -132,6 +148,36 @@ export async function deleteClient(token: string, clientId: string) {
   });
 }
 
+export async function createLocation(
+  token: string,
+  payload: { clientId: string; name: string; city: string; address: string; notes: string }
+) {
+  return requestJson<{ location: BootstrapPayload["locations"][number] }>("/api/locations", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateLocation(
+  token: string,
+  locationId: string,
+  payload: { clientId: string; name: string; city: string; address: string; notes: string }
+) {
+  return requestJson<{ location: BootstrapPayload["locations"][number] }>(`/api/locations/${locationId}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteLocation(token: string, locationId: string) {
+  return requestJson<{ ok: true }>(`/api/locations/${locationId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
 export async function createChannel(
   token: string,
   payload: {
@@ -140,6 +186,7 @@ export async function createChannel(
     slug: string;
     description: string;
     orientation: string;
+    locationIds?: string[];
   }
 ) {
   return requestJson<{ channel: BootstrapPayload["channels"][number] }>("/api/channels", {
@@ -158,6 +205,7 @@ export async function updateChannel(
     slug: string;
     description: string;
     orientation: string;
+    locationIds?: string[];
   }
 ) {
   return requestJson<{ channel: BootstrapPayload["channels"][number] }>(`/api/channels/${channelId}`, {
@@ -222,7 +270,7 @@ export async function deletePlaylist(token: string, playlistId: string) {
 export async function createPlaylistItem(
   token: string,
   playlistId: string,
-  payload: { mediaId: string; sortOrder: number; loopCount: number; volumePercent: number }
+  payload: { mediaId: string; sortOrder: number; loopCount: number; volumePercent: number; locationIds?: string[] }
 ) {
   return requestJson<{ playlistItem: unknown }>(`/api/playlists/${playlistId}/items`, {
     method: "POST",
@@ -352,6 +400,7 @@ export async function approveDevice(
     name: string;
     clientId: string;
     channelId: string;
+    locationId: string;
     playerType: string;
     locationLabel: string;
     notes: string;
@@ -373,6 +422,7 @@ export async function updateDevice(
     name: string;
     clientId: string;
     channelId: string;
+    locationId: string;
     playerType: string;
     locationLabel: string;
     notes: string;

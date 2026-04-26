@@ -4,10 +4,15 @@ import { PrismaClient } from "../generated/prisma/client.js";
 type DatabaseShape = {
   users: any[];
   clients: any[];
+  locations: any[];
+  userClients: any[];
+  userLocationAccesses: any[];
+  channelLocations: any[];
   channels: any[];
   media: any[];
   playlists: any[];
   playlistItems: any[];
+  playlistItemLocations: any[];
   schedules: any[];
   devices: any[];
   deviceCommands: any[];
@@ -32,10 +37,15 @@ export function createEmptyDatabase(): DatabaseShape {
   return {
     users: [],
     clients: [],
+    locations: [],
+    userClients: [],
+    userLocationAccesses: [],
+    channelLocations: [],
     channels: [],
     media: [],
     playlists: [],
     playlistItems: [],
+    playlistItemLocations: [],
     schedules: [],
     devices: [],
     deviceCommands: [],
@@ -69,10 +79,15 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
   const [
     users,
     clients,
+    locations,
+    userClients,
+    userLocationAccesses,
+    channelLocations,
     channels,
     media,
     playlists,
     playlistItems,
+    playlistItemLocations,
     schedules,
     devices,
     deviceCommands,
@@ -82,10 +97,15 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
   ] = await Promise.all([
     prisma.user.findMany(),
     prisma.client.findMany(),
+    prisma.location.findMany(),
+    prisma.userClient.findMany(),
+    prisma.userLocationAccess.findMany(),
+    prisma.channelLocation.findMany(),
     prisma.channel.findMany(),
     prisma.media.findMany(),
     prisma.playlist.findMany(),
     prisma.playlistItem.findMany(),
+    prisma.playlistItemLocation.findMany(),
     prisma.schedule.findMany(),
     prisma.device.findMany(),
     prisma.deviceCommand.findMany(),
@@ -102,6 +122,20 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
       updatedAt: toIso(entry.updatedAt)
     })),
     clients: clients.map(withIsoDates),
+    locations: locations.map(withIsoDates),
+    userClients: userClients.map((entry) => ({
+      ...entry,
+      allLocations: entry.allLocations !== false,
+      createdAt: toIso(entry.createdAt)
+    })),
+    userLocationAccesses: userLocationAccesses.map((entry) => ({
+      ...entry,
+      createdAt: toIso(entry.createdAt)
+    })),
+    channelLocations: channelLocations.map((entry) => ({
+      ...entry,
+      createdAt: toIso(entry.createdAt)
+    })),
     channels: channels.map(withIsoDates),
     media: media.map((entry) => ({
       ...withIsoDates(entry),
@@ -113,11 +147,16 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
       channelId: entry.channelId || ""
     })),
     playlistItems: playlistItems.map(withIsoDates),
+    playlistItemLocations: playlistItemLocations.map((entry) => ({
+      ...entry,
+      createdAt: toIso(entry.createdAt)
+    })),
     schedules: schedules.map(withIsoDates),
     devices: devices.map((entry) => ({
       ...withIsoDates(entry),
       clientId: entry.clientId || "",
       channelId: entry.channelId || "",
+      locationId: entry.locationId || "",
       approvalStatus: String(entry.approvalStatus),
       playerType: entry.playerType || "video_standard",
       desiredDisplayState: String(entry.desiredDisplayState),
@@ -173,6 +212,9 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await tx.deviceLog.deleteMany();
     await tx.deviceCommand.deleteMany();
     await tx.playbackEvent.deleteMany();
+    await tx.userLocationAccess.deleteMany();
+    await tx.playlistItemLocation.deleteMany();
+    await tx.channelLocation.deleteMany();
     await tx.userClient.deleteMany();
     await tx.playlistItem.deleteMany();
     await tx.schedule.deleteMany();
@@ -180,16 +222,21 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await tx.playlist.deleteMany();
     await tx.media.deleteMany();
     await tx.channel.deleteMany();
+    await tx.location.deleteMany();
     await tx.client.deleteMany();
     await tx.user.deleteMany();
 
     await createMany(tx.user, batches.users);
     await createMany(tx.client, batches.clients);
+    await createMany(tx.location, batches.locations);
     await createMany(tx.userClient, batches.userClients);
+    await createMany(tx.userLocationAccess, batches.userLocationAccesses);
     await createMany(tx.channel, batches.channels);
+    await createMany(tx.channelLocation, batches.channelLocations);
     await createMany(tx.media, batches.media);
     await createMany(tx.playlist, batches.playlists);
     await createMany(tx.playlistItem, batches.playlistItems);
+    await createMany(tx.playlistItemLocation, batches.playlistItemLocations);
     await createMany(tx.schedule, batches.schedules);
     await createMany(tx.device, batches.devices);
     await createMany(tx.deviceCommand, batches.deviceCommands);
@@ -222,16 +269,41 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
   const userIds = new Set(users.map((entry) => entry.id));
   const clientIds = new Set(clients.map((entry) => entry.id));
 
-  const userClients = (database as any).userClients
-    ? (database as any).userClients
-        .filter((entry) => userIds.has(entry.userId) && clientIds.has(entry.clientId))
-        .map((entry) => ({
-          id: entry.id,
-          userId: entry.userId,
-          clientId: entry.clientId,
-          createdAt: toDate(entry.createdAt)
-        }))
-    : [];
+  const locations = ((database as any).locations || [])
+    .filter((entry) => clientIds.has(entry.clientId))
+    .map((entry) => ({
+      id: entry.id,
+      clientId: entry.clientId,
+      name: entry.name || "Lokalizacja",
+      city: entry.city || "",
+      address: entry.address || "",
+      notes: entry.notes || "",
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
+  const locationIds = new Set(locations.map((entry) => entry.id));
+
+  const userClients = ((database as any).userClients || [])
+    .filter((entry) => userIds.has(entry.userId) && clientIds.has(entry.clientId))
+    .map((entry) => ({
+      id: entry.id,
+      userId: entry.userId,
+      clientId: entry.clientId,
+      allLocations: entry.allLocations !== false,
+      createdAt: toDate(entry.createdAt)
+    }));
+  const userClientPairs = new Set(userClients.map((entry) => `${entry.userId}:${entry.clientId}`));
+
+  const userLocationAccesses = ((database as any).userLocationAccesses || [])
+    .filter((entry) => userIds.has(entry.userId) && clientIds.has(entry.clientId) && locationIds.has(entry.locationId))
+    .filter((entry) => userClientPairs.has(`${entry.userId}:${entry.clientId}`))
+    .map((entry) => ({
+      id: entry.id,
+      userId: entry.userId,
+      clientId: entry.clientId,
+      locationId: entry.locationId,
+      createdAt: toDate(entry.createdAt)
+    }));
 
   const channels = database.channels
     .filter((entry) => clientIds.has(entry.clientId))
@@ -246,6 +318,15 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       updatedAt: toDate(entry.updatedAt)
     }));
   const channelIds = new Set(channels.map((entry) => entry.id));
+
+  const channelLocations = ((database as any).channelLocations || [])
+    .filter((entry) => channelIds.has(entry.channelId) && locationIds.has(entry.locationId))
+    .map((entry) => ({
+      id: entry.id,
+      channelId: entry.channelId,
+      locationId: entry.locationId,
+      createdAt: toDate(entry.createdAt)
+    }));
 
   const media = database.media
     .filter((entry) => clientIds.has(entry.clientId))
@@ -294,6 +375,16 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       createdAt: toDate(entry.createdAt),
       updatedAt: toDate(entry.updatedAt)
     }));
+  const playlistItemIds = new Set(playlistItems.map((entry) => entry.id));
+
+  const playlistItemLocations = ((database as any).playlistItemLocations || [])
+    .filter((entry) => playlistItemIds.has(entry.playlistItemId) && locationIds.has(entry.locationId))
+    .map((entry) => ({
+      id: entry.id,
+      playlistItemId: entry.playlistItemId,
+      locationId: entry.locationId,
+      createdAt: toDate(entry.createdAt)
+    }));
 
   const schedules = database.schedules
     .filter(
@@ -324,6 +415,7 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     name: entry.name || "Android TV",
     clientId: clientIds.has(entry.clientId) ? entry.clientId : null,
     channelId: channelIds.has(entry.channelId) ? entry.channelId : null,
+    locationId: locationIds.has(entry.locationId) ? entry.locationId : null,
     locationLabel: entry.locationLabel || "",
     notes: entry.notes || "",
     platform: entry.platform || "android",
@@ -424,11 +516,15 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
   return {
     users,
     clients,
+    locations,
     userClients,
+    userLocationAccesses,
     channels,
+    channelLocations,
     media,
     playlists,
     playlistItems,
+    playlistItemLocations,
     schedules,
     devices,
     deviceCommands,

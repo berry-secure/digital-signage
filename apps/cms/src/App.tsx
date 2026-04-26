@@ -5,6 +5,7 @@ import {
   clearToken,
   createChannel,
   createClient,
+  createLocation,
   createPlaylist,
   createPlaylistItem,
   createPlaybackEvent,
@@ -13,6 +14,7 @@ import {
   deleteChannel,
   deleteClient,
   deleteDevice,
+  deleteLocation,
   deleteMedia,
   deletePlaylist,
   deletePlaylistItem,
@@ -30,6 +32,7 @@ import {
   updateChannel,
   updateClient,
   updateDevice,
+  updateLocation,
   updatePlaybackEvent,
   updatePlaylist,
   updateSchedule,
@@ -59,6 +62,7 @@ import type {
   DeviceCommandType,
   DeviceRecord,
   InstallationInfo,
+  LocationRecord,
   MediaKind,
   MediaRecord,
   PlaybackEventRecord,
@@ -90,6 +94,9 @@ type UserFormState = {
   password: string;
   name: string;
   role: UserRole;
+  clientIds: string[];
+  allLocations: boolean;
+  locationIds: string[];
 };
 
 type ClientFormState = {
@@ -99,6 +106,15 @@ type ClientFormState = {
   brandColor: string;
 };
 
+type LocationFormState = {
+  id: string;
+  clientId: string;
+  name: string;
+  city: string;
+  address: string;
+  notes: string;
+};
+
 type ChannelFormState = {
   id: string;
   clientId: string;
@@ -106,6 +122,7 @@ type ChannelFormState = {
   slug: string;
   description: string;
   orientation: "landscape" | "portrait";
+  locationIds: string[];
 };
 
 type MediaFormState = {
@@ -158,6 +175,7 @@ type PlaylistItemFormState = {
   sortOrder: string;
   loopCount: string;
   volumePercent: string;
+  locationIds: string[];
 };
 
 type ScheduleFormState = {
@@ -181,6 +199,7 @@ type DeviceFormState = {
   name: string;
   clientId: string;
   channelId: string;
+  locationId: string;
   playerType: DeviceCenterFilters["type"];
   locationLabel: string;
   notes: string;
@@ -243,10 +262,11 @@ const playbackEventTriggerOptions: Array<{ value: PlaybackEventFormState["trigge
 ];
 
 const emptyBootstrap: BootstrapPayload = {
-  user: { id: "", email: "", name: "", role: "owner" },
+  user: { id: "", email: "", name: "", role: "owner", clientIds: [], locationAccesses: [] },
   users: [],
   installation: { apiBaseUrl: "", apkUrl: "" },
   clients: [],
+  locations: [],
   channels: [],
   media: [],
   playlists: [],
@@ -263,7 +283,10 @@ const emptyUserForm: UserFormState = {
   email: "",
   password: "",
   name: "",
-  role: "editor"
+  role: "editor",
+  clientIds: [],
+  allLocations: true,
+  locationIds: []
 };
 
 const emptyClientForm: ClientFormState = {
@@ -273,13 +296,23 @@ const emptyClientForm: ClientFormState = {
   brandColor: "#ff6a3d"
 };
 
+const emptyLocationForm: LocationFormState = {
+  id: "",
+  clientId: "",
+  name: "",
+  city: "",
+  address: "",
+  notes: ""
+};
+
 const emptyChannelForm: ChannelFormState = {
   id: "",
   clientId: "",
   name: "",
   slug: "",
   description: "",
-  orientation: "landscape"
+  orientation: "landscape",
+  locationIds: []
 };
 
 const emptyMediaForm: MediaFormState = {
@@ -307,7 +340,8 @@ const emptyPlaylistItemForm: PlaylistItemFormState = {
   mediaId: "",
   sortOrder: "10",
   loopCount: "1",
-  volumePercent: "100"
+  volumePercent: "100",
+  locationIds: []
 };
 
 const emptyScheduleForm: ScheduleFormState = {
@@ -345,6 +379,7 @@ const emptyDeviceForm: DeviceFormState = {
   name: "",
   clientId: "",
   channelId: "",
+  locationId: "",
   playerType: "video_standard",
   locationLabel: "",
   notes: "",
@@ -372,6 +407,7 @@ function App() {
   const [loginForm, setLoginForm] = useState({ email: "admin@berry-secure.pl", password: "berry-secure-admin" });
   const [userForm, setUserForm] = useState<UserFormState>(emptyUserForm);
   const [clientForm, setClientForm] = useState<ClientFormState>(emptyClientForm);
+  const [locationForm, setLocationForm] = useState<LocationFormState>(emptyLocationForm);
   const [channelForm, setChannelForm] = useState<ChannelFormState>(emptyChannelForm);
   const [mediaForm, setMediaForm] = useState<MediaFormState>(emptyMediaForm);
   const [mediaInputKey, setMediaInputKey] = useState(0);
@@ -380,7 +416,7 @@ function App() {
   const [playbackEventForm, setPlaybackEventForm] = useState<PlaybackEventFormState>(emptyPlaybackEventForm);
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(emptyScheduleForm);
   const [deviceForm, setDeviceForm] = useState<DeviceFormState>(emptyDeviceForm);
-  const [deviceFilters, setDeviceFilters] = useState<DeviceCenterFilters>({ clientId: "", query: "", type: "" });
+  const [deviceFilters, setDeviceFilters] = useState<DeviceCenterFilters>({ clientId: "", locationId: "", query: "", type: "" });
   const [deviceLogFilters, setDeviceLogFilters] = useState<DeviceLogFilters>({
     clientId: "",
     deviceId: "",
@@ -397,6 +433,7 @@ function App() {
   const [deviceCommandDrafts, setDeviceCommandDrafts] = useState<Record<string, DeviceCommandType>>({});
 
   const clients = dashboard.clients;
+  const locations = dashboard.locations || [];
   const channels = dashboard.channels;
   const media = dashboard.media;
   const playlists = dashboard.playlists;
@@ -413,6 +450,7 @@ function App() {
   const offlineAlerts = useMemo(() => getOfflineDeviceAlerts(devices), [devices]);
   const deviceFormIsPending = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "pending");
   const deviceFormIsApproved = devices.some((device) => device.id === deviceForm.id && device.approvalStatus === "approved");
+  const selectedApprovedDevice = approvedDevices.find((device) => device.id === deviceForm.id) || null;
   const latestCommandByDevice = useMemo(() => buildLatestCommandLookup(deviceCommands), [deviceCommands]);
   const filteredDeviceLogs = useMemo(
     () => filterDeviceLogs(deviceLogs, devices, deviceLogFilters),
@@ -425,8 +463,29 @@ function App() {
   const proofSummary = useMemo(() => summarizeProofOfPlay(filteredProofOfPlay), [filteredProofOfPlay]);
 
   const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
+  const locationLookup = useMemo(() => new Map(locations.map((location) => [location.id, location])), [locations]);
   const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
   const mediaLookup = useMemo(() => new Map(media.map((entry) => [entry.id, entry])), [media]);
+  const locationsForUserForm = useMemo(
+    () => locations.filter((location) => !userForm.clientIds.length || userForm.clientIds.includes(location.clientId)),
+    [locations, userForm.clientIds]
+  );
+  const locationsForChannel = useMemo(
+    () => locations.filter((location) => !channelForm.clientId || location.clientId === channelForm.clientId),
+    [channelForm.clientId, locations]
+  );
+  const selectedPlaylistForItem = useMemo(
+    () => playlists.find((playlist) => playlist.id === playlistItemForm.playlistId) || null,
+    [playlistItemForm.playlistId, playlists]
+  );
+  const locationsForPlaylistItem = useMemo(
+    () => locations.filter((location) => !selectedPlaylistForItem || location.clientId === selectedPlaylistForItem.clientId),
+    [locations, selectedPlaylistForItem]
+  );
+  const mediaForPlaylistItem = useMemo(
+    () => media.filter((entry) => !selectedPlaylistForItem || entry.clientId === selectedPlaylistForItem.clientId),
+    [media, selectedPlaylistForItem]
+  );
 
   const filteredChannelsForPlaylist = useMemo(
     () => channels.filter((channel) => !playlistForm.clientId || channel.clientId === playlistForm.clientId),
@@ -461,6 +520,14 @@ function App() {
   const filteredChannelsForDevice = useMemo(
     () => channels.filter((channel) => !deviceForm.clientId || channel.clientId === deviceForm.clientId),
     [channels, deviceForm.clientId]
+  );
+  const filteredLocationsForDevice = useMemo(
+    () => locations.filter((location) => !deviceForm.clientId || location.clientId === deviceForm.clientId),
+    [deviceForm.clientId, locations]
+  );
+  const filteredLocationsForDeviceFilter = useMemo(
+    () => locations.filter((location) => !deviceFilters.clientId || location.clientId === deviceFilters.clientId),
+    [deviceFilters.clientId, locations]
   );
 
   useEffect(() => {
@@ -561,7 +628,10 @@ function App() {
       email: user.email,
       password: "",
       name: user.name,
-      role: user.role
+      role: user.role,
+      clientIds: user.clientIds || [],
+      allLocations: user.locationAccesses.every((entry) => entry.allLocations),
+      locationIds: user.locationAccesses.flatMap((entry) => entry.locationIds)
     });
     setActiveSection("users");
   }
@@ -576,6 +646,18 @@ function App() {
     setActiveSection("clients");
   }
 
+  function beginLocationEdit(location: LocationRecord) {
+    setLocationForm({
+      id: location.id,
+      clientId: location.clientId,
+      name: location.name,
+      city: location.city,
+      address: location.address,
+      notes: location.notes
+    });
+    setActiveSection("clients");
+  }
+
   function beginChannelEdit(channel: ChannelRecord) {
     setChannelForm({
       id: channel.id,
@@ -583,7 +665,8 @@ function App() {
       name: channel.name,
       slug: channel.slug,
       description: channel.description,
-      orientation: channel.orientation
+      orientation: channel.orientation,
+      locationIds: channel.locationIds || []
     });
     setActiveSection("channels");
   }
@@ -647,6 +730,7 @@ function App() {
       name: device.name === "Android TV" ? `Ekran ${device.serial}` : device.name,
       clientId: device.clientId,
       channelId: device.channelId,
+      locationId: device.locationId,
       playerType: getDeviceType(device),
       locationLabel: device.locationLabel,
       notes: device.notes,
@@ -663,6 +747,7 @@ function App() {
       name: device.name,
       clientId: device.clientId,
       channelId: device.channelId,
+      locationId: device.locationId,
       playerType: getDeviceType(device),
       locationLabel: device.locationLabel,
       notes: device.notes,
@@ -721,8 +806,13 @@ function App() {
     setScheduleForm((entry) => ({ ...entry, daysOfWeek: nextDays }));
   }
 
+  function toggleValue(values: string[], value: string) {
+    return values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
+  }
+
   const stats = [
     { label: "Klienci", value: clients.length, hint: "tenanty w systemie" },
+    { label: "Lokalizacje", value: locations.length, hint: "site’y klientów" },
     { label: "Kanały", value: channels.length, hint: "grupy emisji" },
     { label: "Media", value: media.length, hint: "pliki opublikowane i draft" },
     { label: "Playlisty", value: playlists.length, hint: "kolejki treści" },
@@ -739,11 +829,7 @@ function App() {
       <main className="login-shell">
         <div className="login-card">
           <span className="eyebrow">Digital Signage Control</span>
-          <h1>Jeden serwer. Jeden CMS. Jeden player.</h1>
-          <p>
-            To jest nowy panel oparty o jeden backend. Logujesz się tutaj, zarządzasz mediami i zatwierdzasz urządzenia
-            po numerze seryjnym.
-          </p>
+          <h1>Signal Deck CMS</h1>
           <form className="stack-form" onSubmit={handleLogin}>
             <label>
               <span>Email</span>
@@ -785,9 +871,6 @@ function App() {
         <div>
           <span className="eyebrow">Berry Secure</span>
           <h1>Signage CMS</h1>
-          <p className="sidebar-copy">
-            Prosty panel operacyjny do demo i wdrożeń. Approval urządzeń działa po stałym numerze seryjnym.
-          </p>
         </div>
 
         <nav className="sidebar-nav" aria-label="Sekcje CMS">
@@ -799,7 +882,6 @@ function App() {
               onClick={() => setActiveSection(item.key)}
             >
               <strong>{item.label}</strong>
-              <span>{item.hint}</span>
             </button>
           ))}
         </nav>
@@ -818,7 +900,7 @@ function App() {
       <main className="content">
         <header className="content-header">
           <div>
-            <span className="eyebrow">Nowa architektura</span>
+            <span className="eyebrow">CMS</span>
             <h2>{sectionTitle(activeSection)}</h2>
           </div>
           <div className="header-actions">
@@ -949,7 +1031,10 @@ function App() {
                           email: userForm.email,
                           password: userForm.password || undefined,
                           name: userForm.name,
-                          role: userForm.role
+                          role: userForm.role,
+                          clientIds: userForm.clientIds,
+                          allLocations: userForm.allLocations,
+                          locationIds: userForm.locationIds
                         });
                       } else {
                         await createUser(token, userForm);
@@ -1012,6 +1097,73 @@ function App() {
                     <option value="editor">Editor</option>
                   </select>
                 </Field>
+                {userForm.role !== "owner" ? (
+                  <>
+                    <Field label="Klienci" htmlFor="user-client-access">
+                      <div id="user-client-access" className="checkbox-grid">
+                        {clients.map((client) => (
+                          <label key={client.id} className="checkbox-row compact">
+                            <input
+                              type="checkbox"
+                              checked={userForm.clientIds.includes(client.id)}
+                              onChange={() =>
+                                setUserForm((current) => {
+                                  const clientIds = toggleValue(current.clientIds, client.id);
+                                  return {
+                                    ...current,
+                                    clientIds,
+                                    locationIds: current.locationIds.filter((locationId) => {
+                                      const location = locationLookup.get(locationId);
+                                      return location && clientIds.includes(location.clientId);
+                                    })
+                                  };
+                                })
+                              }
+                            />
+                            <span>{client.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </Field>
+                    <label className="checkbox-row" htmlFor="user-all-locations">
+                      <input
+                        id="user-all-locations"
+                        name="user-all-locations"
+                        type="checkbox"
+                        checked={userForm.allLocations}
+                        onChange={(event) =>
+                          setUserForm((current) => ({
+                            ...current,
+                            allLocations: event.target.checked,
+                            locationIds: event.target.checked ? [] : current.locationIds
+                          }))
+                        }
+                      />
+                      <span>Dostęp do wszystkich lokalizacji wybranych klientów</span>
+                    </label>
+                    {!userForm.allLocations ? (
+                      <Field label="Lokalizacje" htmlFor="user-location-access">
+                        <div id="user-location-access" className="checkbox-grid">
+                          {locationsForUserForm.map((location) => (
+                            <label key={location.id} className="checkbox-row compact">
+                              <input
+                                type="checkbox"
+                                checked={userForm.locationIds.includes(location.id)}
+                                onChange={() =>
+                                  setUserForm((current) => ({
+                                    ...current,
+                                    locationIds: toggleValue(current.locationIds, location.id)
+                                  }))
+                                }
+                              />
+                              <span>{location.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </Field>
+                    ) : null}
+                  </>
+                ) : null}
                 <button className="primary-button" type="submit" disabled={submitting}>
                   {submitting ? "Zapisywanie..." : userForm.id ? "Zapisz użytkownika" : "Dodaj konto"}
                 </button>
@@ -1137,10 +1289,122 @@ function App() {
                 </button>
               </form>
 
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runMutation(
+                    async () => {
+                      if (!token) {
+                        return;
+                      }
+                      const payload = {
+                        clientId: locationForm.clientId,
+                        name: locationForm.name,
+                        city: locationForm.city,
+                        address: locationForm.address,
+                        notes: locationForm.notes
+                      };
+                      if (locationForm.id) {
+                        await updateLocation(token, locationForm.id, payload);
+                      } else {
+                        await createLocation(token, payload);
+                      }
+                    },
+                    locationForm.id ? "Zapisano lokalizację." : "Dodano lokalizację.",
+                    () => setLocationForm(emptyLocationForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>{locationForm.id ? "Edytuj lokalizację" : "Nowa lokalizacja"}</h3>
+                  {locationForm.id ? (
+                    <div className="card-actions">
+                      <button className="ghost-button" type="button" onClick={() => setLocationForm(emptyLocationForm)}>
+                        Anuluj
+                      </button>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        onClick={() => {
+                          if (!token || !window.confirm(`Usunąć lokalizację ${locationForm.name}?`)) {
+                            return;
+                          }
+                          void runMutation(
+                            async () => deleteLocation(token, locationForm.id),
+                            "Usunięto lokalizację.",
+                            () => setLocationForm(emptyLocationForm)
+                          );
+                        }}
+                      >
+                        Usuń
+                      </button>
+                    </div>
+                  ) : null}
+                </header>
+                <Field label="Klient" htmlFor="location-client">
+                  <select
+                    id="location-client"
+                    name="location-client"
+                    value={locationForm.clientId}
+                    onChange={(event) => setLocationForm((current) => ({ ...current, clientId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Nazwa site’u" htmlFor="location-name">
+                  <input
+                    id="location-name"
+                    name="location-name"
+                    value={locationForm.name}
+                    onChange={(event) => setLocationForm((current) => ({ ...current, name: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Miasto" htmlFor="location-city">
+                    <input
+                      id="location-city"
+                      name="location-city"
+                      value={locationForm.city}
+                      onChange={(event) => setLocationForm((current) => ({ ...current, city: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Adres" htmlFor="location-address">
+                    <input
+                      id="location-address"
+                      name="location-address"
+                      value={locationForm.address}
+                      onChange={(event) => setLocationForm((current) => ({ ...current, address: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <Field label="Notatki" htmlFor="location-notes">
+                  <textarea
+                    id="location-notes"
+                    name="location-notes"
+                    rows={3}
+                    value={locationForm.notes}
+                    onChange={(event) => setLocationForm((current) => ({ ...current, notes: event.target.value }))}
+                  />
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {locationForm.id ? "Zapisz lokalizację" : "Dodaj lokalizację"}
+                </button>
+              </form>
+
               <article className="panel">
                 <header className="panel-header">
                   <h3>Lista klientów</h3>
-                  <span>{clients.length}</span>
+                  <span>
+                    {clients.length} / {locations.length}
+                  </span>
                 </header>
                 {clients.length ? (
                   <div className="list-stack">
@@ -1148,10 +1412,34 @@ function App() {
                       <div key={client.id} className="list-card">
                         <div>
                           <strong>{client.name}</strong>
-                          <span>{client.slug}</span>
+                          <span>
+                            {client.slug} · {locations.filter((location) => location.clientId === client.id).length} site
+                          </span>
+                          <div className="mini-chip-row">
+                            {locations
+                              .filter((location) => location.clientId === client.id)
+                              .slice(0, 4)
+                              .map((location) => (
+                                <button
+                                  key={location.id}
+                                  className="mini-chip"
+                                  type="button"
+                                  onClick={() => beginLocationEdit(location)}
+                                >
+                                  {location.name}
+                                </button>
+                              ))}
+                          </div>
                         </div>
                         <div className="card-actions">
                           <span className="color-chip" style={{ backgroundColor: client.brandColor }} />
+                          <button
+                            className="ghost-button"
+                            type="button"
+                            onClick={() => setLocationForm({ ...emptyLocationForm, clientId: client.id })}
+                          >
+                            Site
+                          </button>
                           <button className="ghost-button" type="button" onClick={() => beginClientEdit(client)}>
                             Edytuj
                           </button>
@@ -1196,7 +1484,8 @@ function App() {
                         name: channelForm.name,
                         slug: channelForm.slug,
                         description: channelForm.description,
-                        orientation: channelForm.orientation
+                        orientation: channelForm.orientation,
+                        locationIds: channelForm.locationIds
                       };
                       if (channelForm.id) {
                         await updateChannel(token, channelForm.id, payload);
@@ -1222,7 +1511,9 @@ function App() {
                     id="channel-client"
                     name="channel-client"
                     value={channelForm.clientId}
-                    onChange={(event) => setChannelForm((current) => ({ ...current, clientId: event.target.value }))}
+                    onChange={(event) =>
+                      setChannelForm((current) => ({ ...current, clientId: event.target.value, locationIds: [] }))
+                    }
                     required
                   >
                     <option value="">Wybierz klienta</option>
@@ -1273,6 +1564,33 @@ function App() {
                     <option value="portrait">Portrait</option>
                   </select>
                 </Field>
+                <Field label="Site’y kanału" htmlFor="channel-locations">
+                  <div id="channel-locations" className="checkbox-grid">
+                    <label className="checkbox-row compact">
+                      <input
+                        type="checkbox"
+                        checked={!channelForm.locationIds.length}
+                        onChange={() => setChannelForm((current) => ({ ...current, locationIds: [] }))}
+                      />
+                      <span>Wszystkie lokalizacje</span>
+                    </label>
+                    {locationsForChannel.map((location) => (
+                      <label key={location.id} className="checkbox-row compact">
+                        <input
+                          type="checkbox"
+                          checked={channelForm.locationIds.includes(location.id)}
+                          onChange={() =>
+                            setChannelForm((current) => ({
+                              ...current,
+                              locationIds: toggleValue(current.locationIds, location.id)
+                            }))
+                          }
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </Field>
                 <Field label="Opis" htmlFor="channel-description">
                   <textarea
                     id="channel-description"
@@ -1299,7 +1617,10 @@ function App() {
                         <div>
                           <strong>{channel.name}</strong>
                           <span>
-                            {clientLookup.get(channel.clientId)?.name || "bez klienta"} · {channel.orientation}
+                            {clientLookup.get(channel.clientId)?.name || "bez klienta"} · {channel.orientation} ·{" "}
+                            {channel.locationIds.length
+                              ? channel.locationIds.map((id) => locationLookup.get(id)?.name).filter(Boolean).join(", ")
+                              : "wszystkie site’y"}
                           </span>
                         </div>
                         <div className="card-actions">
@@ -1644,7 +1965,8 @@ function App() {
                         mediaId: playlistItemForm.mediaId,
                         sortOrder: Number(playlistItemForm.sortOrder || 10),
                         loopCount: Number(playlistItemForm.loopCount || 1),
-                        volumePercent: Number(playlistItemForm.volumePercent || 100)
+                        volumePercent: Number(playlistItemForm.volumePercent || 100),
+                        locationIds: playlistItemForm.locationIds
                       });
                     },
                     "Dodano materiał do playlisty.",
@@ -1662,7 +1984,12 @@ function App() {
                     name="playlist-item-playlist"
                     value={playlistItemForm.playlistId}
                     onChange={(event) =>
-                      setPlaylistItemForm((current) => ({ ...current, playlistId: event.target.value }))
+                      setPlaylistItemForm((current) => ({
+                        ...current,
+                        playlistId: event.target.value,
+                        mediaId: "",
+                        locationIds: []
+                      }))
                     }
                     required
                   >
@@ -1683,12 +2010,39 @@ function App() {
                     required
                   >
                     <option value="">Wybierz media</option>
-                    {media.map((entry) => (
+                    {mediaForPlaylistItem.map((entry) => (
                       <option key={entry.id} value={entry.id}>
                         {entry.title}
                       </option>
                     ))}
                   </select>
+                </Field>
+                <Field label="Site’y elementu" htmlFor="playlist-item-locations">
+                  <div id="playlist-item-locations" className="checkbox-grid">
+                    <label className="checkbox-row compact">
+                      <input
+                        type="checkbox"
+                        checked={!playlistItemForm.locationIds.length}
+                        onChange={() => setPlaylistItemForm((current) => ({ ...current, locationIds: [] }))}
+                      />
+                      <span>Wszystkie lokalizacje</span>
+                    </label>
+                    {locationsForPlaylistItem.map((location) => (
+                      <label key={location.id} className="checkbox-row compact">
+                        <input
+                          type="checkbox"
+                          checked={playlistItemForm.locationIds.includes(location.id)}
+                          onChange={() =>
+                            setPlaylistItemForm((current) => ({
+                              ...current,
+                              locationIds: toggleValue(current.locationIds, location.id)
+                            }))
+                          }
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                  </div>
                 </Field>
                 <div className="inline-grid triple">
                   <Field label="Sort" htmlFor="playlist-item-sort">
@@ -1775,7 +2129,10 @@ function App() {
                               <div>
                                 <strong>{item.media?.title || mediaLookup.get(item.mediaId)?.title || "Brak media"}</strong>
                                 <span>
-                                  sort {item.sortOrder} · loop {item.loopCount} · vol {item.volumePercent}
+                                  sort {item.sortOrder} · loop {item.loopCount} · vol {item.volumePercent} ·{" "}
+                                  {item.locationIds.length
+                                    ? item.locationIds.map((id) => locationLookup.get(id)?.name).filter(Boolean).join(", ")
+                                    : "wszystkie site’y"}
                                 </span>
                               </div>
                               <button
@@ -2327,12 +2684,29 @@ function App() {
                   id="device-filter-client"
                   name="device-filter-client"
                   value={deviceFilters.clientId}
-                  onChange={(event) => setDeviceFilters((current) => ({ ...current, clientId: event.target.value }))}
+                  onChange={(event) =>
+                    setDeviceFilters((current) => ({ ...current, clientId: event.target.value, locationId: "" }))
+                  }
                 >
                   <option value="">Wszyscy klienci</option>
                   {clients.map((client) => (
                     <option key={client.id} value={client.id}>
                       {client.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Lokalizacja" htmlFor="device-filter-location">
+                <select
+                  id="device-filter-location"
+                  name="device-filter-location"
+                  value={deviceFilters.locationId}
+                  onChange={(event) => setDeviceFilters((current) => ({ ...current, locationId: event.target.value }))}
+                >
+                  <option value="">Wszystkie lokalizacje</option>
+                  {filteredLocationsForDeviceFilter.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
                     </option>
                   ))}
                 </select>
@@ -2369,8 +2743,8 @@ function App() {
               <button
                 className="ghost-button"
                 type="button"
-                onClick={() => setDeviceFilters({ clientId: "", query: "", type: "" })}
-                disabled={!deviceFilters.clientId && !deviceFilters.query && !deviceFilters.type}
+                onClick={() => setDeviceFilters({ clientId: "", locationId: "", query: "", type: "" })}
+                disabled={!deviceFilters.clientId && !deviceFilters.locationId && !deviceFilters.query && !deviceFilters.type}
               >
                 Wyczyść
               </button>
@@ -2439,6 +2813,7 @@ function App() {
                     name: deviceForm.name,
                     clientId: deviceForm.clientId,
                     channelId: deviceForm.channelId,
+                    locationId: deviceForm.locationId,
                     playerType: deviceForm.playerType || "video_standard",
                     locationLabel: deviceForm.locationLabel,
                     notes: deviceForm.notes,
@@ -2504,7 +2879,8 @@ function App() {
                         setDeviceForm((current) => ({
                           ...current,
                           clientId: event.target.value,
-                          channelId: ""
+                          channelId: "",
+                          locationId: ""
                         }))
                       }
                       required
@@ -2534,7 +2910,31 @@ function App() {
                     </select>
                   </Field>
                 </div>
-                <Field label="Lokalizacja / opis" htmlFor="device-location">
+                <Field label="Lokalizacja" htmlFor="device-location-id">
+                  <select
+                    id="device-location-id"
+                    name="device-location-id"
+                    value={deviceForm.locationId}
+                    onChange={(event) =>
+                      setDeviceForm((current) => {
+                        const location = locationLookup.get(event.target.value);
+                        return {
+                          ...current,
+                          locationId: event.target.value,
+                          locationLabel: location?.name || current.locationLabel
+                        };
+                      })
+                    }
+                  >
+                    <option value="">Bez lokalizacji</option>
+                    {filteredLocationsForDevice.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Opis miejsca" htmlFor="device-location">
                   <input
                     id="device-location"
                     name="device-location"
@@ -2611,71 +3011,85 @@ function App() {
                 <span>{approvedDevices.length}</span>
               </header>
               {approvedDevices.length ? (
-                <div className="device-center-grid">
-                  {approvedDevices.map((device) => {
-                    const latestCommand = latestCommandByDevice.get(device.id);
-                    const selectedCommand = deviceCommandDrafts[device.id] || "force_sync";
+                <div className="device-master-grid">
+                  <div className="device-list-table">
+                    {approvedDevices.map((device) => (
+                      <button
+                        key={device.id}
+                        className={`device-row ${selectedApprovedDevice?.id === device.id ? "active" : ""}`}
+                        type="button"
+                        onClick={() => beginDeviceEdit(device)}
+                      >
+                        <span className={`status-dot ${getDeviceConnection(device)}`} />
+                        <strong>{device.name}</strong>
+                        <span>{device.serial}</span>
+                        <span>{device.locationName || device.locationLabel || "bez site"}</span>
+                        <span>{getDeviceTypeLabel(device)}</span>
+                        <span>{device.playerState}</span>
+                      </button>
+                    ))}
+                  </div>
 
-                    return (
-                    <div key={device.id} className={`device-card command-card ${device.desiredDisplayState === "blackout" ? "is-blackout" : ""}`}>
-                      <div className="device-card-main">
+                  {selectedApprovedDevice ? (
+                    <div className={`device-properties ${selectedApprovedDevice.desiredDisplayState === "blackout" ? "is-blackout" : ""}`}>
+                      <header className="panel-header">
                         <div>
-                          <strong>{device.name}</strong>
-                          <span>
-                            {device.serial} · {device.clientName || "bez klienta"} · {device.channelName || "bez kanału"}
-                          </span>
-                          <small>
-                            {device.locationLabel ? `${device.locationLabel} · ` : ""}
-                            {device.playerMessage || "Brak komunikatu od playera."}
-                            {device.activeItemTitle ? ` · aktualnie: ${device.activeItemTitle}` : ""}
-                          </small>
+                          <h3>{selectedApprovedDevice.name}</h3>
+                          <span>{selectedApprovedDevice.serial}</span>
                         </div>
-                        <div className="device-meta">
-                          <span className={`status-pill ${getDeviceConnection(device)}`}>
-                            {connectionLabel(getDeviceConnection(device))}
-                          </span>
-                          {device.desiredDisplayState === "blackout" ? <span className="status-pill blackout">blackout</span> : null}
-                          <span className="status-pill neutral">{device.playerState}</span>
-                        </div>
-                      </div>
+                        <span className={`status-pill ${getDeviceConnection(selectedApprovedDevice)}`}>
+                          {connectionLabel(getDeviceConnection(selectedApprovedDevice))}
+                        </span>
+                      </header>
                       <div className="device-detail-grid">
                         <div>
+                          <span>Klient</span>
+                          <strong>{selectedApprovedDevice.clientName || "brak"}</strong>
+                        </div>
+                        <div>
+                          <span>Kanał</span>
+                          <strong>{selectedApprovedDevice.channelName || "brak"}</strong>
+                        </div>
+                        <div>
+                          <span>Site</span>
+                          <strong>{selectedApprovedDevice.locationName || selectedApprovedDevice.locationLabel || "brak"}</strong>
+                        </div>
+                        <div>
                           <span>Heartbeat</span>
-                          <strong>{formatDateTime(device.lastSeenAt)}</strong>
+                          <strong>{formatDateTime(selectedApprovedDevice.lastSeenAt)}</strong>
                         </div>
                         <div>
                           <span>Sync</span>
-                          <strong>{formatDateTime(device.lastSyncAt)}</strong>
+                          <strong>{formatDateTime(selectedApprovedDevice.lastSyncAt)}</strong>
                         </div>
                         <div>
                           <span>Platforma</span>
-                          <strong>{device.platform || "brak"} · APK {device.appVersion || "brak"}</strong>
+                          <strong>{selectedApprovedDevice.platform || "brak"} · APK {selectedApprovedDevice.appVersion || "brak"}</strong>
                         </div>
                         <div>
                           <span>Typ</span>
-                          <strong>{getDeviceTypeLabel(device)}</strong>
+                          <strong>{getDeviceTypeLabel(selectedApprovedDevice)}</strong>
                         </div>
                         <div>
                           <span>Volume</span>
-                          <strong>{device.volumePercent}%</strong>
+                          <strong>{selectedApprovedDevice.volumePercent}%</strong>
                         </div>
                       </div>
                       <div className="live-command-panel">
                         <div>
                           <span>Live command</span>
                           <strong>
-                            {latestCommand
-                              ? `${commandLabel(latestCommand.type)} · ${commandStatusLabel(latestCommand.status)}`
+                            {latestCommandByDevice.get(selectedApprovedDevice.id)
+                              ? `${commandLabel(latestCommandByDevice.get(selectedApprovedDevice.id)!.type)} · ${commandStatusLabel(latestCommandByDevice.get(selectedApprovedDevice.id)!.status)}`
                               : "Brak komend"}
                           </strong>
-                          {latestCommand?.message ? <small>{latestCommand.message}</small> : null}
                         </div>
                         <select
-                          value={selectedCommand}
+                          value={deviceCommandDrafts[selectedApprovedDevice.id] || "force_sync"}
                           onChange={(event) =>
                             setDeviceCommandDrafts((current) => ({
                               ...current,
-                              [device.id]: event.target.value as DeviceCommandType
+                              [selectedApprovedDevice.id]: event.target.value as DeviceCommandType
                             }))
                           }
                         >
@@ -2688,33 +3102,30 @@ function App() {
                         <button
                           className="secondary-button"
                           type="button"
-                          onClick={() => sendLiveCommand(device, selectedCommand)}
+                          onClick={() => sendLiveCommand(selectedApprovedDevice, deviceCommandDrafts[selectedApprovedDevice.id] || "force_sync")}
                           disabled={submitting}
                         >
                           Wyślij
                         </button>
                       </div>
                       <div className="card-actions">
-                        {device.desiredDisplayState === "blackout" ? (
-                          <button className="primary-button" type="button" onClick={() => quickUpdateDevice(device, "wake")} disabled={submitting}>
+                        {selectedApprovedDevice.desiredDisplayState === "blackout" ? (
+                          <button className="primary-button" type="button" onClick={() => quickUpdateDevice(selectedApprovedDevice, "wake")} disabled={submitting}>
                             Wake
                           </button>
                         ) : (
-                          <button className="ghost-button" type="button" onClick={() => quickUpdateDevice(device, "blackout")} disabled={submitting}>
+                          <button className="ghost-button" type="button" onClick={() => quickUpdateDevice(selectedApprovedDevice, "blackout")} disabled={submitting}>
                             Blackout
                           </button>
                         )}
-                        <button className="ghost-button" type="button" onClick={() => beginDeviceEdit(device)}>
-                          Edytuj
-                        </button>
                         <button
                           className="ghost-button"
                           type="button"
                           onClick={() => {
-                            if (!token || !window.confirm(`Zresetować approval urządzenia ${device.name}?`)) {
+                            if (!token || !window.confirm(`Zresetować approval urządzenia ${selectedApprovedDevice.name}?`)) {
                               return;
                             }
-                            void runMutation(async () => resetDevice(token, device.id), "Urządzenie wróciło do kolejki pending.");
+                            void runMutation(async () => resetDevice(token, selectedApprovedDevice.id), "Urządzenie wróciło do kolejki pending.");
                           }}
                         >
                           Reset / rozłącz
@@ -2723,18 +3134,19 @@ function App() {
                           className="danger-button"
                           type="button"
                           onClick={() => {
-                            if (!token || !window.confirm(`Usunąć urządzenie ${device.name}?`)) {
+                            if (!token || !window.confirm(`Usunąć urządzenie ${selectedApprovedDevice.name}?`)) {
                               return;
                             }
-                            void runMutation(async () => deleteDevice(token, device.id), "Usunięto urządzenie.");
+                            void runMutation(async () => deleteDevice(token, selectedApprovedDevice.id), "Usunięto urządzenie.");
                           }}
                         >
                           Usuń
                         </button>
                       </div>
                     </div>
-                    );
-                  })}
+                  ) : (
+                    <EmptyState text="Wybierz urządzenie z listy." />
+                  )}
                 </div>
               ) : (
                 <EmptyState text="Jeszcze żadne urządzenie nie zostało zatwierdzone." />
