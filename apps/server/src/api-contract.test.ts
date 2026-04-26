@@ -557,11 +557,37 @@ describe("MVP API contract", () => {
     assert.equal(finished.status, 201);
     assert.equal(finished.body.proofOfPlay.status, "finished");
 
+    const interrupted = await request(isolatedApp)
+      .post("/api/player/proof-of-play")
+      .send({
+        deviceSerial: "MKPROOF001",
+        deviceSecret: "proof-secret",
+        status: "interrupted",
+        playlistId: queueEntry.playlistId,
+        scheduleId: queueEntry.scheduleId,
+        mediaId: queueEntry.mediaId,
+        playbackItemId: queueEntry.id,
+        sourceType: queueEntry.sourceType,
+        mediaTitle: queueEntry.title,
+        mediaKind: queueEntry.kind,
+        startedAt: "2026-04-25T00:01:00.000Z",
+        finishedAt: "2026-04-25T00:01:12.000Z",
+        durationSeconds: 12,
+        checksum: queueEntry.checksum,
+        contentVersion: queueEntry.contentVersion,
+        errorMessage: "service mode entered",
+        appVersion: "1.0.1"
+      });
+
+    assert.equal(interrupted.status, 201);
+    assert.equal(interrupted.body.proofOfPlay.status, "interrupted");
+    assert.equal(interrupted.body.proofOfPlay.errorMessage, "service mode entered");
+
     const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
-    assert.equal(bootstrap.body.proofOfPlay.length, 2);
+    assert.equal(bootstrap.body.proofOfPlay.length, 3);
     assert.deepEqual(
       bootstrap.body.proofOfPlay.map((entry) => entry.status).sort(),
-      ["finished", "started"]
+      ["finished", "interrupted", "started"]
     );
 
     await rm(isolatedDataDir, { recursive: true, force: true });

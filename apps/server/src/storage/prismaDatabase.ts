@@ -603,7 +603,7 @@ function logSeverityOrDefault(value: string) {
 }
 
 function proofStatusOrDefault(value: string) {
-  return ["started", "finished", "error"].includes(value) ? value : "started";
+  return ["started", "finished", "interrupted", "error"].includes(value) ? value : "started";
 }
 
 function sourceTypeOrDefault(value: string) {

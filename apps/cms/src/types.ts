@@ -29,7 +29,7 @@ export type MediaKind = "video" | "image" | "audio";
 export type PlaybackEventType = "audio" | "visual";
 export type PlaybackEventTriggerMode = "items" | "minutes";
 export type DeviceLogSeverity = "info" | "warn" | "error";
-export type ProofOfPlayStatus = "started" | "finished" | "error";
+export type ProofOfPlayStatus = "started" | "finished" | "interrupted" | "error";
 export type PlaybackSourceType = "playlist" | "event";
 
 export interface UserRecord {
@@ -209,6 +209,9 @@ export interface DeviceLogRecord {
   clientName: string;
   channelId: string;
   channelName: string;
+  locationId: string;
+  locationName: string;
+  locationLabel: string;
 }
 
 export interface ProofOfPlayRecord {
@@ -239,6 +242,9 @@ export interface ProofOfPlayRecord {
   clientName: string;
   channelId: string;
   channelName: string;
+  locationId: string;
+  locationName: string;
+  locationLabel: string;
 }
 
 export interface DeviceCommandRecord {

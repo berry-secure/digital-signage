@@ -6,21 +6,25 @@ import type { ProofOfPlayRecord } from "./types";
 describe("Proof of Play helpers", () => {
   it("filters reports by client, device, status, and search query", () => {
     const records = [
-      proof({ id: "started", clientId: "client-a", deviceId: "device-a", deviceName: "Lobby TV", status: "started" }),
-      proof({ id: "finished", clientId: "client-a", deviceId: "device-b", deviceName: "Menu Board", status: "finished" }),
+      proof({ id: "started", clientId: "client-a", deviceId: "device-a", locationId: "loc-a", deviceName: "Lobby TV", status: "started" }),
+      proof({ id: "finished", clientId: "client-a", deviceId: "device-b", locationId: "loc-b", deviceName: "Menu Board", status: "finished" }),
       proof({ id: "error", clientId: "client-b", deviceId: "device-c", deviceName: "Window", status: "error", mediaTitle: "Promo Fail" })
     ];
 
     assert.deepEqual(
-      filterProofOfPlay(records, { clientId: "client-a", deviceId: "", status: "", query: "" }).map((entry) => entry.id),
+      filterProofOfPlay(records, { clientId: "client-a", locationId: "", deviceId: "", status: "", query: "" }).map((entry) => entry.id),
       ["started", "finished"]
     );
     assert.deepEqual(
-      filterProofOfPlay(records, { clientId: "", deviceId: "device-b", status: "", query: "" }).map((entry) => entry.id),
+      filterProofOfPlay(records, { clientId: "", locationId: "loc-b", deviceId: "", status: "", query: "" }).map((entry) => entry.id),
       ["finished"]
     );
     assert.deepEqual(
-      filterProofOfPlay(records, { clientId: "", deviceId: "", status: "error", query: "promo" }).map((entry) => entry.id),
+      filterProofOfPlay(records, { clientId: "", locationId: "", deviceId: "device-b", status: "", query: "" }).map((entry) => entry.id),
+      ["finished"]
+    );
+    assert.deepEqual(
+      filterProofOfPlay(records, { clientId: "", locationId: "", deviceId: "", status: "error", query: "promo" }).map((entry) => entry.id),
       ["error"]
     );
   });
@@ -29,13 +33,15 @@ describe("Proof of Play helpers", () => {
     const summary = summarizeProofOfPlay([
       proof({ status: "started", deviceId: "a", mediaId: "m1" }),
       proof({ status: "finished", deviceId: "a", mediaId: "m1" }),
+      proof({ status: "interrupted", deviceId: "a", mediaId: "m1" }),
       proof({ status: "error", deviceId: "b", mediaId: "m2" })
     ]);
 
     assert.deepEqual(summary, {
-      total: 3,
+      total: 4,
       started: 1,
       finished: 1,
+      interrupted: 1,
       error: 1,
       uniqueDevices: 2,
       uniqueMedia: 2
@@ -47,7 +53,7 @@ describe("Proof of Play helpers", () => {
       proof({ deviceName: "Lobby, TV", mediaTitle: "Promo \"A\"", status: "finished" })
     ]);
 
-    assert.match(csv, /^status,device,serial,client,channel,media,source,startedAt,finishedAt,durationSeconds,checksum,contentVersion,errorMessage/);
+    assert.match(csv, /^status,device,serial,client,location,channel,media,source,startedAt,finishedAt,durationSeconds,checksum,contentVersion,errorMessage/);
     assert.match(csv, /"Lobby, TV"/);
     assert.match(csv, /"Promo ""A"""/);
   });
@@ -82,6 +88,9 @@ function proof(overrides: Partial<ProofOfPlayRecord> = {}): ProofOfPlayRecord {
     clientName: "Client",
     channelId: "channel-1",
     channelName: "Channel",
+    locationId: "location-1",
+    locationName: "Lobby",
+    locationLabel: "Lobby",
     ...overrides
   };
 }
