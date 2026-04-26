@@ -14,6 +14,7 @@ from .commands import route_command
 from .config import PlayerConfig, load_config
 from .identity import PlayerIdentity, load_or_create_system_identity
 from .playback import MvpProcessController, build_mpv_playlist_command, playback_decision, probe_drm_connector_states
+from .proof import ProofOfPlayReporter
 
 LOGGER = logging.getLogger("signaldeck.agent")
 
@@ -35,6 +36,7 @@ class AgentRuntime:
     cms: CmsClient
     cache: MediaCache
     playback_controller: Any = field(default_factory=MvpProcessController)
+    proof_reporter: Any | None = None
     states: dict[str, OutputState] = field(default_factory=dict)
     connector_status: dict[str, bool] | None = None
 
@@ -116,18 +118,21 @@ class AgentRuntime:
         state = self.states.setdefault(output, OutputState())
         if not self._is_output_connected(output):
             self.playback_controller.stop(output)
+            self._stop_proof(output)
             state.current_item_id = ""
             self._log(serial, secret, "warn", "display", f"{output} is disconnected; playback paused", {"output": output})
             return
 
         if state.desired_display_state == "blackout":
             self.playback_controller.stop(output)
+            self._stop_proof(output)
             state.current_item_id = ""
             return
 
         playable_items = _playable_items(queue)
         if not playable_items:
             self.playback_controller.stop(output)
+            self._stop_proof(output)
             state.current_item_id = ""
             return
 
@@ -144,6 +149,7 @@ class AgentRuntime:
                 _first_image_duration(playable_items),
             )
             self.playback_controller.play(output, command)
+            self._start_proof(output, serial, secret, playable_items)
             state.current_item_id = queue_id
             LOGGER.info("started playback on %s with %s queued item(s)", output, len(playable_items))
         except Exception as error:
@@ -172,6 +178,21 @@ class AgentRuntime:
         connector = states.get(output)
         return True if connector is None else connector.connected
 
+    def _start_proof(self, output: str, serial: str, secret: str, queue: list[dict[str, Any]]) -> None:
+        if not self.proof_reporter:
+            return
+        self.proof_reporter.start_output(
+            output,
+            serial,
+            secret,
+            queue,
+            lambda output_name=output: self.playback_controller.is_running(output_name),
+        )
+
+    def _stop_proof(self, output: str) -> None:
+        if self.proof_reporter:
+            self.proof_reporter.stop_output(output)
+
 
 def create_runtime(
     config_path: str | Path = "/etc/signaldeck/player.toml",
@@ -180,7 +201,10 @@ def create_runtime(
 ) -> AgentRuntime:
     config = load_config(config_path)
     identity = load_or_create_system_identity(identity_path, config.outputs)
-    return AgentRuntime(config, identity, CmsClient(config.server_url), MediaCache(state_root, config.cache_limit_mb))
+    cms = CmsClient(config.server_url)
+    cache = MediaCache(state_root, config.cache_limit_mb)
+    proof_reporter = ProofOfPlayReporter(cms, Path(state_root) / "proof-of-play", config.app_version)
+    return AgentRuntime(config, identity, cms, cache, proof_reporter=proof_reporter)
 
 
 def run_forever(runtime: AgentRuntime) -> None:

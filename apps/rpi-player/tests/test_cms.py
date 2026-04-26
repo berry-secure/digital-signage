@@ -26,6 +26,7 @@ class CmsClientTest(unittest.TestCase):
             {"approvalStatus": "pending", "playback": {"mode": "idle", "queue": []}, "commands": []},
             {"command": {"status": "acked"}},
             {"deviceLog": {"message": "Skipped"}},
+            {"proofOfPlay": {"id": "proof-1"}},
         ]
 
         def fake_urlopen(request, timeout):
@@ -38,14 +39,18 @@ class CmsClientTest(unittest.TestCase):
             session = client.post_session({"serial": "MK1", "secret": "secret"})
             ack = client.ack_command("command-1", "MK1", "secret", "acked", "OK")
             log = client.post_log("MK1", "secret", "warn", "playback", "Skipped")
+            proof = client.post_proof_of_play({"serial": "MK1", "secret": "secret", "eventType": "started"})
 
         self.assertEqual(session["approvalStatus"], "pending")
         self.assertEqual(ack["command"]["status"], "acked")
         self.assertEqual(log["deviceLog"]["message"], "Skipped")
+        self.assertEqual(proof["proofOfPlay"]["id"], "proof-1")
         self.assertEqual(requests[0][0], "https://cms.example.test/api/player/session")
         self.assertEqual(requests[1][0], "https://cms.example.test/api/player/commands/command-1/ack")
         self.assertEqual(requests[2][0], "https://cms.example.test/api/player/logs")
+        self.assertEqual(requests[3][0], "https://cms.example.test/api/player/proof-of-play")
         self.assertEqual(requests[2][1]["severity"], "warn")
+        self.assertEqual(requests[3][1]["eventType"], "started")
         self.assertEqual(requests[0][2], 2)
 
 

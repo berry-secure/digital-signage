@@ -14,6 +14,9 @@ class CmsClient:
     def post_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/player/session", payload)
 
+    def post_proof_of_play(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/api/player/proof-of-play", payload)
+
     def ack_command(self, command_id: str, serial: str, secret: str, status: str, message: str) -> dict[str, Any]:
         return self._post(
             f"/api/player/commands/{command_id}/ack",
