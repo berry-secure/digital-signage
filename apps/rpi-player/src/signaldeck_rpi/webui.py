@@ -5,6 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 import argparse
+import base64
+import hmac
 import html
 import json
 import os
@@ -26,6 +28,7 @@ class StatusProvider:
     state_root: Path = Path("/var/lib/signaldeck")
     config_path: Path = Path("/etc/signaldeck/player.toml")
     boot_dir: Path = Path("/boot/firmware")
+    webui_secret_path: Path = Path("/etc/signaldeck/webui.secret")
 
     def snapshot(self) -> dict[str, Any]:
         connectors = probe_drm_connector_states()
@@ -54,6 +57,7 @@ class StatusProvider:
             "outputs": outputs,
             "setupLock": str(self.boot_dir / "SIGNALDECK_LOCK"),
             "setupLocked": (self.boot_dir / "SIGNALDECK_LOCK").exists(),
+            "setupHotspot": _connection_active("SignalDeck-Setup"),
         }
 
     def _manifest_count(self, output: str) -> int:
@@ -65,6 +69,9 @@ class StatusProvider:
         except (OSError, json.JSONDecodeError):
             return 0
         return len(data) if isinstance(data, list) else 0
+
+    def webui_password(self) -> str:
+        return _read_secret(self.webui_secret_path)
 
     def _system_status(self) -> dict[str, Any]:
         disk = shutil.disk_usage(self.state_root if self.state_root.exists() else Path("/"))
@@ -212,12 +219,15 @@ class WebUiApp:
     <section>
       <h2>Serwis</h2>
       <div class="actions">
+        <form method="post" action="/api/start-hotspot"><button type="submit">Start setup hotspot</button></form>
+        <form method="post" action="/api/stop-hotspot"><button type="submit">Stop setup hotspot</button></form>
         <form method="post" action="/api/restart-agent"><button type="submit">Restart agent</button></form>
         <form method="post" action="/api/force-playlist-update"><button type="submit">Restart playback</button></form>
         <form method="post" action="/api/lock-setup"><button type="submit">Mark setup complete</button></form>
         <form method="post" action="/api/reboot"><button type="submit">Reboot OS</button></form>
       </div>
       <p class="hint">Setup lock: <code>{html.escape(str(status["setupLocked"]))}</code></p>
+      <p class="hint">Setup hotspot: <code>{html.escape("active" if status["setupHotspot"] else "inactive")}</code></p>
     </section>
   </main>
 </body>
@@ -276,6 +286,14 @@ class WebUiApp:
         _run(["systemctl", "restart", "signaldeck-agent.service"])
         return "Agent restarted"
 
+    def start_setup_hotspot(self) -> str:
+        _run(["nmcli", "connection", "up", "SignalDeck-Setup"])
+        return "Setup hotspot started"
+
+    def stop_setup_hotspot(self) -> str:
+        _run(["nmcli", "connection", "down", "SignalDeck-Setup"], allow_failure=True)
+        return "Setup hotspot stopped"
+
     def save_time(self, fields: dict[str, str]) -> str:
         timezone = fields.get("timezone", "").strip()
         if timezone:
@@ -319,6 +337,8 @@ class WebUiApp:
 def make_handler(app: WebUiApp):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if not self._authorize():
+                return
             if self.path == "/api/status":
                 payload = json.dumps(app.render_status_json()).encode("utf-8")
                 self.send_response(200)
@@ -336,6 +356,8 @@ def make_handler(app: WebUiApp):
             self.wfile.write(payload)
 
         def do_POST(self):
+            if not self._authorize():
+                return
             try:
                 fields = _read_form(self)
                 if self.path == "/api/config":
@@ -350,6 +372,10 @@ def make_handler(app: WebUiApp):
                     message = app.update_player(fields)
                 elif self.path == "/api/force-playlist-update":
                     message = app.force_playlist_update()
+                elif self.path == "/api/start-hotspot":
+                    message = app.start_setup_hotspot()
+                elif self.path == "/api/stop-hotspot":
+                    message = app.stop_setup_hotspot()
                 elif self.path == "/api/reboot":
                     message = app.reboot_os()
                 elif self.path == "/api/lock-setup":
@@ -371,6 +397,19 @@ def make_handler(app: WebUiApp):
             self.send_header("Location", f"/?message={html.escape(message)}")
             self.end_headers()
 
+        def _authorize(self) -> bool:
+            password = app.provider.webui_password()
+            if not password:
+                return True
+            if verify_basic_auth(self.headers.get("Authorization", ""), password):
+                return True
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="Signal Deck Player"')
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"Authentication required")
+            return False
+
         def log_message(self, format, *args):
             return
 
@@ -391,7 +430,8 @@ def create_provider(
 ) -> StatusProvider:
     config = load_config(config_path)
     identity = load_or_create_system_identity(identity_path, config.outputs)
-    return StatusProvider(config, identity, Path(state_root), Path(config_path), Path(boot_dir))
+    config_file = Path(config_path)
+    return StatusProvider(config, identity, Path(state_root), config_file, Path(boot_dir), config_file.parent / "webui.secret")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -410,6 +450,19 @@ def _read_form(handler: BaseHTTPRequestHandler) -> dict[str, str]:
     length = int(handler.headers.get("content-length", "0"))
     raw = handler.rfile.read(length).decode("utf-8")
     return {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
+
+
+def verify_basic_auth(header: str, password: str, username: str = "admin") -> bool:
+    if not password or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header.split(" ", 1)[1], validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    provided_username, separator, provided_password = decoded.partition(":")
+    if not separator:
+        return False
+    return hmac.compare_digest(provided_username, username) and hmac.compare_digest(provided_password, password)
 
 
 def _options(selected: str, values: list[str]) -> str:
@@ -453,6 +506,18 @@ def _run(command: list[str], allow_failure: bool = False) -> subprocess.Complete
         detail = (result.stderr or result.stdout or "command failed").strip()
         raise RuntimeError(f"{' '.join(command)}: {detail}")
     return result
+
+
+def _read_secret(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _connection_active(name: str) -> bool:
+    active = _capture(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"])
+    return name in active.splitlines()
 
 
 def _capture(command: list[str]) -> str:

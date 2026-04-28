@@ -12,6 +12,7 @@ class ServiceConsoleTest(unittest.TestCase):
         self.assertIn("Restart playback", labels)
         self.assertIn("CMS and sync settings", labels)
         self.assertIn("Wi-Fi and IPv4 settings", labels)
+        self.assertIn("Start setup hotspot", labels)
         self.assertIn("Time settings", labels)
         self.assertIn("Update player", labels)
         self.assertIn("Reboot OS", labels)
@@ -83,6 +84,17 @@ class ServiceConsoleTest(unittest.TestCase):
 
         pause_playback.assert_called_once_with()
         resume_playback.assert_called_once_with()
+
+    def test_console_hotspot_action_uses_webui_app(self):
+        app = Mock()
+        app.start_setup_hotspot.return_value = "Setup hotspot started"
+        console = ServiceConsole(app)
+
+        should_exit = console._run_action(Mock(), "start_hotspot")
+
+        self.assertFalse(should_exit)
+        self.assertEqual(console.message, "Setup hotspot started")
+        app.start_setup_hotspot.assert_called_once_with()
 
 
 if __name__ == "__main__":

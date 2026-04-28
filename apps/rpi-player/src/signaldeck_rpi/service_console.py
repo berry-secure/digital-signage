@@ -31,6 +31,7 @@ def build_service_menu() -> list[ServiceMenuItem]:
         ServiceMenuItem("p", "Restart playback", "restart_playback"),
         ServiceMenuItem("c", "CMS and sync settings", "cms"),
         ServiceMenuItem("w", "Wi-Fi and IPv4 settings", "wifi"),
+        ServiceMenuItem("h", "Start setup hotspot", "start_hotspot"),
         ServiceMenuItem("t", "Time settings", "time"),
         ServiceMenuItem("u", "Update player", "update"),
         ServiceMenuItem("l", "Mark setup complete", "lock_setup"),
@@ -159,6 +160,9 @@ class ServiceConsole:
                 self.message = self._edit_cms(screen)
             elif action == "wifi":
                 self.message = self._edit_wifi(screen)
+            elif action == "start_hotspot":
+                assert self.app is not None
+                self.message = self.app.start_setup_hotspot()
             elif action == "time":
                 self.message = self._edit_time(screen)
             elif action == "update":

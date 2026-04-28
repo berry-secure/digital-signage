@@ -7,6 +7,7 @@ dependencies = []
 
 [project.scripts]
 signaldeck-agent = "signaldeck_agent:main"
+signaldeck-firstboot = "signaldeck_firstboot:main"
 signaldeck-webui = "signaldeck_webui:main"
 signaldeck-hotkeys = "signaldeck_hotkeys:main"
 signaldeck-service-console = "signaldeck_service_console:main"

@@ -2,10 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from base64 import b64encode
 
 from signaldeck_rpi.config import default_config
 from signaldeck_rpi.identity import load_or_create_identity
-from signaldeck_rpi.webui import StatusProvider, WebUiApp
+from signaldeck_rpi.webui import StatusProvider, WebUiApp, verify_basic_auth
 
 
 class WebUiTest(unittest.TestCase):
@@ -43,6 +44,7 @@ class WebUiTest(unittest.TestCase):
         self.assertIn("Diagnostics", html)
         self.assertIn("CPU load", html)
         self.assertIn("Manifest items", html)
+        self.assertIn("Start setup hotspot", html)
 
     def test_webui_save_config_updates_player_toml(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -108,6 +110,26 @@ class WebUiTest(unittest.TestCase):
             self.assertEqual(message, "Playlist refresh requested")
             self.assertFalse((manifest_dir / "HDMI-A-1.json").exists())
             run.assert_called_with(["systemctl", "restart", "signaldeck-agent.service"], allow_failure=True)
+
+    def test_webui_can_start_and_stop_setup_hotspot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = self._app(Path(directory))
+
+            with patch("signaldeck_rpi.webui._run") as run:
+                start_message = app.start_setup_hotspot()
+                stop_message = app.stop_setup_hotspot()
+
+            self.assertEqual(start_message, "Setup hotspot started")
+            self.assertEqual(stop_message, "Setup hotspot stopped")
+            run.assert_any_call(["nmcli", "connection", "up", "SignalDeck-Setup"])
+            run.assert_any_call(["nmcli", "connection", "down", "SignalDeck-Setup"], allow_failure=True)
+
+    def test_basic_auth_accepts_admin_with_configured_secret(self):
+        header = "Basic " + b64encode(b"admin:Maasck23646").decode("ascii")
+
+        self.assertTrue(verify_basic_auth(header, "Maasck23646"))
+        self.assertFalse(verify_basic_auth(header, "wrong"))
+        self.assertFalse(verify_basic_auth("", "Maasck23646"))
 
     def _app(self, root: Path):
         config = default_config()

@@ -138,7 +138,7 @@ enabled = true
 TOML
   fi
 
-  write_secret_once "${CONFIG_DIR}/webui.secret" 32
+  write_webui_secret
   write_secret_once "${CONFIG_DIR}/hotspot.secret" 16
   chown -R root:"${APP_USER}" "${CONFIG_DIR}"
   chmod 640 "${CONFIG_DIR}/player.toml" "${CONFIG_DIR}/webui.secret" "${CONFIG_DIR}/hotspot.secret"
@@ -159,9 +159,19 @@ write_secret_once() {
   fi
 }
 
+write_webui_secret() {
+  if [[ -n "${SIGNALDECK_WEBUI_PASSWORD:-}" ]]; then
+    printf '%s\n' "${SIGNALDECK_WEBUI_PASSWORD}" >"${CONFIG_DIR}/webui.secret"
+    chmod 600 "${CONFIG_DIR}/webui.secret"
+  else
+    write_secret_once "${CONFIG_DIR}/webui.secret" 32
+  fi
+}
+
 write_systemd_units() {
   log "Installing systemd units."
   install -m 0644 "${APP_DIR}/systemd/signaldeck-agent.service" /etc/systemd/system/signaldeck-agent.service
+  install -m 0644 "${APP_DIR}/systemd/signaldeck-firstboot.service" /etc/systemd/system/signaldeck-firstboot.service
   install -m 0644 "${APP_DIR}/systemd/signaldeck-webui.service" /etc/systemd/system/signaldeck-webui.service
   install -m 0644 "${APP_DIR}/systemd/signaldeck-setup-mode.service" /etc/systemd/system/signaldeck-setup-mode.service
   install -m 0644 "${APP_DIR}/systemd/signaldeck-hotkeys.service" /etc/systemd/system/signaldeck-hotkeys.service

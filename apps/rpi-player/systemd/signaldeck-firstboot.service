@@ -1,0 +1,13 @@
+[Unit]
+Description=Signal Deck first boot provisioning
+After=NetworkManager.service
+Wants=NetworkManager.service
+Before=signaldeck-setup-mode.service signaldeck-webui.service signaldeck-agent.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/signaldeck/apps/rpi-player
+ExecStart=/opt/signaldeck/venv/bin/python -m signaldeck_firstboot --webui-password Maasck23646
+
+[Install]
+WantedBy=multi-user.target
