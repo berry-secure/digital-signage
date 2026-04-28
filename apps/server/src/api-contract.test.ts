@@ -426,6 +426,10 @@ describe("MVP API contract", () => {
       .post("/api/clients")
       .set("Authorization", `Bearer ${ownerToken}`)
       .send({ name: "Proof Client" });
+    const location = await request(isolatedApp)
+      .post("/api/locations")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Proof Location", city: "Warszawa" });
     const channel = await request(isolatedApp)
       .post("/api/channels")
       .set("Authorization", `Bearer ${ownerToken}`)
@@ -484,6 +488,7 @@ describe("MVP API contract", () => {
         name: "Proof Screen",
         clientId: client.body.client.id,
         channelId: channel.body.channel.id,
+        locationId: location.body.location.id,
         locationLabel: "Lobby",
         notes: "",
         playerType: "video_standard",
@@ -560,7 +565,7 @@ describe("MVP API contract", () => {
     const interrupted = await request(isolatedApp)
       .post("/api/player/proof-of-play")
       .send({
-        deviceSerial: "MKPROOF001",
+        deviceId: playerSession.body.device.id,
         deviceSecret: "proof-secret",
         status: "interrupted",
         playlistId: queueEntry.playlistId,
@@ -583,12 +588,129 @@ describe("MVP API contract", () => {
     assert.equal(interrupted.body.proofOfPlay.status, "interrupted");
     assert.equal(interrupted.body.proofOfPlay.errorMessage, "service mode entered");
 
+    const report = await request(isolatedApp)
+      .get(
+        `/api/proof-of-play?clientId=${client.body.client.id}&locationId=${location.body.location.id}&deviceId=${playerSession.body.device.id}&status=finished&limit=10`
+      )
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    assert.equal(report.status, 200);
+    assert.equal(report.body.total, 1);
+    assert.equal(report.body.proofOfPlay[0].status, "finished");
+    assert.equal(report.body.proofOfPlay[0].locationName, "Proof Location");
+
     const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
-    assert.equal(bootstrap.body.proofOfPlay.length, 3);
-    assert.deepEqual(
-      bootstrap.body.proofOfPlay.map((entry) => entry.status).sort(),
-      ["finished", "interrupted", "started"]
-    );
+    assert.deepEqual(bootstrap.body.proofOfPlay, []);
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
+
+  it("keeps bought music separate from media and exposes client music channels", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-music-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "music-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Music Owner",
+      publicBaseUrl: "https://cms.example.test"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "music-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Music Client" });
+    const location = await request(isolatedApp)
+      .post("/api/locations")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ clientId: client.body.client.id, name: "Music Site", city: "Poznań" });
+
+    const track = await request(isolatedApp)
+      .post("/api/music/tracks")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .field("title", "Licensed Song")
+      .field("artist", "Signal Band")
+      .field("album", "Retail Pack")
+      .field("durationSeconds", "180")
+      .field("status", "published")
+      .field("licenseNotes", "Commercial license")
+      .attach("file", Buffer.from("Licensed Song fixture"), {
+        filename: "licensed-song.mp3",
+        contentType: "audio/mpeg"
+      });
+
+    assert.equal(track.status, 201);
+    assert.equal(track.body.musicTrack.title, "Licensed Song");
+
+    const musicPlaylist = await request(isolatedApp)
+      .post("/api/music/playlists")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Breakfast Music", description: "Morning set", isActive: true });
+    assert.equal(musicPlaylist.status, 201);
+
+    const playlistTrack = await request(isolatedApp)
+      .post(`/api/music/playlists/${musicPlaylist.body.musicPlaylist.id}/tracks`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ trackId: track.body.musicTrack.id, sortOrder: 10, volumePercent: 90 });
+    assert.equal(playlistTrack.status, 201);
+
+    const musicChannel = await request(isolatedApp)
+      .post("/api/music/channels")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        playlistId: musicPlaylist.body.musicPlaylist.id,
+        name: "Sala audio",
+        locationIds: [location.body.location.id],
+        isActive: true
+      });
+    assert.equal(musicChannel.status, 201);
+
+    const ownerBootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
+    assert.equal(ownerBootstrap.body.media.length, 0);
+    assert.equal(ownerBootstrap.body.musicTracks.length, 1);
+    assert.equal(ownerBootstrap.body.musicPlaylists[0].items[0].trackTitle, "Licensed Song");
+    assert.deepEqual(ownerBootstrap.body.musicChannels[0].locationIds, [location.body.location.id]);
+
+    await request(isolatedApp)
+      .post("/api/users")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        email: "music-manager@example.test",
+        password: "manager-password",
+        name: "Music Manager",
+        role: "manager",
+        clientIds: [client.body.client.id],
+        allLocations: false,
+        locationIds: [location.body.location.id]
+      });
+    const managerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "music-manager@example.test", password: "manager-password" });
+    const managerBootstrap = await request(isolatedApp)
+      .get("/api/bootstrap")
+      .set("Authorization", `Bearer ${managerLogin.body.token}`);
+
+    const forbiddenGlobalChannel = await request(isolatedApp)
+      .post("/api/music/channels")
+      .set("Authorization", `Bearer ${managerLogin.body.token}`)
+      .send({
+        clientId: client.body.client.id,
+        playlistId: musicPlaylist.body.musicPlaylist.id,
+        name: "Global audio",
+        locationIds: [],
+        isActive: true
+      });
+
+    assert.equal(forbiddenGlobalChannel.status, 400);
+
+    assert.equal(managerBootstrap.body.musicTracks.length, 0);
+    assert.equal(managerBootstrap.body.musicPlaylists.length, 1);
+    assert.equal(managerBootstrap.body.musicChannels.length, 1);
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
@@ -801,6 +923,11 @@ function createFakePrisma(calls: string[]) {
     channel: [],
     channelLocation: [],
     media: [],
+    musicTrack: [],
+    musicPlaylist: [],
+    musicPlaylistTrack: [],
+    musicChannel: [],
+    musicChannelLocation: [],
     playlist: [],
     playlistItem: [],
     playlistItemLocation: [],
@@ -837,6 +964,11 @@ function createFakePrisma(calls: string[]) {
     channel: model("channel"),
     channelLocation: model("channelLocation"),
     media: model("media"),
+    musicTrack: model("musicTrack"),
+    musicPlaylist: model("musicPlaylist"),
+    musicPlaylistTrack: model("musicPlaylistTrack"),
+    musicChannel: model("musicChannel"),
+    musicChannelLocation: model("musicChannelLocation"),
     playlist: model("playlist"),
     playlistItem: model("playlistItem"),
     playlistItemLocation: model("playlistItemLocation"),

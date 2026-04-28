@@ -357,6 +357,7 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
   const channelIds = database.channels.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const playlistIds = database.playlists.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const locationIds = database.locations.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
+  const musicChannelIds = database.musicChannels.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
   const mediaToDelete = database.media.filter((entry) => entry.clientId === clientId);
   const resetDeviceIds = database.devices.filter((entry) => entry.clientId === clientId).map((entry) => entry.id);
 
@@ -369,6 +370,10 @@ app.delete("/api/clients/:id", requireAuth, async (req, res) => {
   database.playlists = database.playlists.filter((entry) => entry.clientId !== clientId);
   database.playlistItemLocations = database.playlistItemLocations.filter((entry) => !locationIds.includes(entry.locationId));
   database.playlistItems = database.playlistItems.filter((entry) => !playlistIds.includes(entry.playlistId));
+  database.musicChannelLocations = database.musicChannelLocations.filter(
+    (entry) => !musicChannelIds.includes(entry.musicChannelId) && !locationIds.includes(entry.locationId)
+  );
+  database.musicChannels = database.musicChannels.filter((entry) => entry.clientId !== clientId);
   database.schedules = database.schedules.filter((entry) => entry.clientId !== clientId);
   database.devices = database.devices.map((entry) =>
     entry.clientId === clientId
@@ -437,6 +442,7 @@ app.delete("/api/locations/:id", requireAuth, async (req, res) => {
   database.locations = database.locations.filter((entry) => entry.id !== location.id);
   database.channelLocations = database.channelLocations.filter((entry) => entry.locationId !== location.id);
   database.playlistItemLocations = database.playlistItemLocations.filter((entry) => entry.locationId !== location.id);
+  database.musicChannelLocations = database.musicChannelLocations.filter((entry) => entry.locationId !== location.id);
   database.userLocationAccesses = database.userLocationAccesses.filter((entry) => entry.locationId !== location.id);
   database.devices = database.devices.map((entry) =>
     entry.locationId === location.id
@@ -589,6 +595,191 @@ app.delete("/api/media/:id", requireAuth, async (req, res) => {
   database.playlistItems = database.playlistItems.filter((entry) => entry.mediaId !== media.id);
   database.playbackEvents = database.playbackEvents.filter((entry) => entry.mediaId !== media.id);
   await removeUploadFile(media.fileName);
+  await persistDatabase();
+  res.json({ ok: true });
+});
+
+app.post("/api/music/tracks", requireAuth, upload.single("file"), async (req, res) => {
+  if (!requireOwnerPermission(req, res)) {
+    if (req.file) {
+      await removeUploadFile(req.file.filename);
+    }
+    return;
+  }
+
+  if (!req.file || !isAudioUpload(req.file)) {
+    if (req.file) {
+      await removeUploadFile(req.file.filename);
+    }
+    res.status(400).json({ message: "Utwór muzyczny wymaga pliku audio." });
+    return;
+  }
+
+  const title = String(req.body?.title || req.file.originalname || "Nowy utwór").trim();
+  const musicTrack = {
+    id: randomUUID(),
+    title,
+    artist: String(req.body?.artist || "").trim(),
+    album: String(req.body?.album || "").trim(),
+    fileName: req.file.filename,
+    originalName: req.file.originalname,
+    mimeType: req.file.mimetype,
+    durationSeconds: Math.max(Number(req.body?.durationSeconds || 180) || 180, 1),
+    status: req.body?.status === "draft" ? "draft" : "published",
+    tags: String(req.body?.tags || "").trim(),
+    licenseNotes: String(req.body?.licenseNotes || "").trim(),
+    checksum: await checksumFile(join(uploadsDir, req.file.filename)),
+    contentVersion: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  database.musicTracks.unshift(musicTrack);
+  await persistDatabase();
+  res.status(201).json({ musicTrack: enrichMusicTrack(musicTrack, getRequestBaseUrl(req)) });
+});
+
+app.delete("/api/music/tracks/:id", requireAuth, async (req, res) => {
+  if (!requireOwnerPermission(req, res)) {
+    return;
+  }
+
+  const musicTrack = findById(database.musicTracks, req.params.id);
+  if (!musicTrack) {
+    res.status(404).json({ message: "Nie znaleziono utworu muzycznego." });
+    return;
+  }
+
+  database.musicPlaylistTracks = database.musicPlaylistTracks.filter((entry) => entry.trackId !== musicTrack.id);
+  database.musicTracks = database.musicTracks.filter((entry) => entry.id !== musicTrack.id);
+  await removeUploadFile(musicTrack.fileName);
+  await persistDatabase();
+  res.json({ ok: true });
+});
+
+app.post("/api/music/playlists", requireAuth, async (req, res) => {
+  if (!requireOwnerPermission(req, res)) {
+    return;
+  }
+
+  const name = String(req.body?.name || "").trim();
+  if (!name) {
+    res.status(400).json({ message: "Playlista muzyczna wymaga nazwy." });
+    return;
+  }
+
+  const musicPlaylist = {
+    id: randomUUID(),
+    name,
+    description: String(req.body?.description || "").trim(),
+    isActive: req.body?.isActive !== false,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  database.musicPlaylists.unshift(musicPlaylist);
+  await persistDatabase();
+  res.status(201).json({ musicPlaylist: presentMusicPlaylist(musicPlaylist, getRequestBaseUrl(req)) });
+});
+
+app.post("/api/music/playlists/:id/tracks", requireAuth, async (req, res) => {
+  if (!requireOwnerPermission(req, res)) {
+    return;
+  }
+
+  const musicPlaylist = findById(database.musicPlaylists, req.params.id);
+  if (!musicPlaylist) {
+    res.status(404).json({ message: "Nie znaleziono playlisty muzycznej." });
+    return;
+  }
+
+  const trackId = String(req.body?.trackId || "").trim();
+  const musicTrack = findById(database.musicTracks, trackId);
+  if (!musicTrack) {
+    res.status(400).json({ message: "Wybierz istniejący utwór muzyczny." });
+    return;
+  }
+
+  const existingItems = database.musicPlaylistTracks.filter((entry) => entry.playlistId === musicPlaylist.id);
+  const musicPlaylistTrack = {
+    id: randomUUID(),
+    playlistId: musicPlaylist.id,
+    trackId: musicTrack.id,
+    sortOrder: Number(req.body?.sortOrder || existingItems.length * 10 + 10) || existingItems.length * 10 + 10,
+    volumePercent: clampNumber(Number(req.body?.volumePercent || 100), 0, 100),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  database.musicPlaylistTracks.push(musicPlaylistTrack);
+  touch(musicPlaylist);
+  await persistDatabase();
+  res.status(201).json({ musicPlaylistTrack: presentMusicPlaylistTrack(musicPlaylistTrack, getRequestBaseUrl(req)) });
+});
+
+app.delete("/api/music/playlists/:playlistId/tracks/:itemId", requireAuth, async (req, res) => {
+  if (!requireOwnerPermission(req, res)) {
+    return;
+  }
+
+  database.musicPlaylistTracks = database.musicPlaylistTracks.filter(
+    (entry) => entry.id !== req.params.itemId || entry.playlistId !== req.params.playlistId
+  );
+  await persistDatabase();
+  res.json({ ok: true });
+});
+
+app.post("/api/music/channels", requireAuth, async (req, res) => {
+  const musicChannel = buildMusicChannelRecord(req.body);
+  const locationIds = normalizeLocationIds(req.body?.locationIds, musicChannel.clientId);
+  const validationError = validateMusicChannel(musicChannel, req.user, locationIds);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
+    return;
+  }
+
+  database.musicChannels.unshift(musicChannel);
+  syncMusicChannelLocations(musicChannel.id, locationIds);
+  await persistDatabase();
+  res.status(201).json({ musicChannel: presentMusicChannel(musicChannel) });
+});
+
+app.put("/api/music/channels/:id", requireAuth, async (req, res) => {
+  const musicChannel = findById(database.musicChannels, req.params.id);
+  if (!musicChannel) {
+    res.status(404).json({ message: "Nie znaleziono kanału muzycznego." });
+    return;
+  }
+
+  const nextMusicChannel = buildMusicChannelRecord(req.body, musicChannel);
+  const locationIds = normalizeLocationIds(req.body?.locationIds, nextMusicChannel.clientId, getMusicChannelLocationIds(musicChannel.id));
+  const validationError = validateMusicChannel(nextMusicChannel, req.user, locationIds);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
+    return;
+  }
+
+  Object.assign(musicChannel, nextMusicChannel);
+  syncMusicChannelLocations(musicChannel.id, locationIds);
+  touch(musicChannel);
+  await persistDatabase();
+  res.json({ musicChannel: presentMusicChannel(musicChannel) });
+});
+
+app.delete("/api/music/channels/:id", requireAuth, async (req, res) => {
+  const musicChannel = findById(database.musicChannels, req.params.id);
+  if (!musicChannel) {
+    res.status(404).json({ message: "Nie znaleziono kanału muzycznego." });
+    return;
+  }
+
+  if (!buildUserScope(req.user).canSeeTargetedRecord(musicChannel.clientId, getMusicChannelLocationIds(musicChannel.id))) {
+    res.status(403).json({ message: "Brak dostępu do tego kanału muzycznego." });
+    return;
+  }
+
+  database.musicChannelLocations = database.musicChannelLocations.filter((entry) => entry.musicChannelId !== musicChannel.id);
+  database.musicChannels = database.musicChannels.filter((entry) => entry.id !== musicChannel.id);
   await persistDatabase();
   res.json({ ok: true });
 });
@@ -919,6 +1110,25 @@ app.delete("/api/devices/:id", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/proof-of-play", requireAuth, (req, res) => {
+  const filters = {
+    clientId: String(req.query.clientId || "").trim(),
+    locationId: String(req.query.locationId || "").trim(),
+    deviceId: String(req.query.deviceId || "").trim(),
+    status: normalizeProofOfPlayStatus(req.query.status),
+    query: String(req.query.query || "").trim()
+  };
+  const limit = clampNumber(Number(req.query.limit || 250), 1, 1000);
+  const scope = buildUserScope(req.user);
+  const rows = filterProofOfPlayReport(database.proofOfPlay, filters, scope).sort(sortProofOfPlayDesc);
+
+  res.json({
+    proofOfPlay: rows.slice(0, limit).map(presentProofOfPlay),
+    total: rows.length,
+    limit
+  });
+});
+
 app.post("/api/player/session", async (req, res) => {
   const serial = normalizeSerial(String(req.body?.serial || ""));
   const secret = String(req.body?.secret || "").trim();
@@ -1032,9 +1242,8 @@ app.post("/api/player/logs", async (req, res) => {
 });
 
 app.post("/api/player/proof-of-play", async (req, res) => {
-  const serial = normalizeSerial(String(req.body?.serial || req.body?.deviceSerial || ""));
   const secret = String(req.body?.secret || req.body?.deviceSecret || "").trim();
-  const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
+  const device = findPlayerReportDevice(req.body, secret);
 
   if (!device) {
     res.status(404).json({ message: "Nie znaleziono urządzenia dla proof of play." });
@@ -1202,6 +1411,15 @@ function requireUserManagementPermission(req, res) {
   return false;
 }
 
+function requireOwnerPermission(req, res) {
+  if (req.user?.role === "owner") {
+    return true;
+  }
+
+  res.status(403).json({ message: "Ta operacja wymaga uprawnień administratora." });
+  return false;
+}
+
 function buildBootstrapPayload(req) {
   const baseUrl = getRequestBaseUrl(req);
   const scope = buildUserScope(req.user);
@@ -1232,6 +1450,14 @@ function buildBootstrapPayload(req) {
       .filter((entry) => scope.canSeeClient(entry.clientId))
       .sort(sortByUpdatedDesc)
       .map((entry) => enrichMedia(entry, baseUrl)),
+    musicTracks: scope.isOwner
+      ? [...database.musicTracks].sort(sortByUpdatedDesc).map((entry) => enrichMusicTrack(entry, baseUrl))
+      : [],
+    musicPlaylists: buildMusicPlaylistViews(scope, baseUrl),
+    musicChannels: [...database.musicChannels]
+      .filter((entry) => scope.canSeeClient(entry.clientId) && scope.canSeeTargetedRecord(entry.clientId, getMusicChannelLocationIds(entry.id)))
+      .sort(sortByName)
+      .map(presentMusicChannel),
     playlists: buildPlaylistViews(scope),
     schedules: [...database.schedules]
       .filter((entry) => scope.canSeeClient(entry.clientId))
@@ -1254,11 +1480,7 @@ function buildBootstrapPayload(req) {
       .sort(sortByCreatedDesc)
       .slice(0, 250)
       .map((entry) => presentDeviceLog(entry)),
-    proofOfPlay: [...database.proofOfPlay]
-      .filter((entry) => scope.canSeeDevice(findById(database.devices, entry.deviceId)))
-      .sort(sortProofOfPlayDesc)
-      .slice(0, 1000)
-      .map((entry) => presentProofOfPlay(entry))
+    proofOfPlay: []
   };
 }
 
@@ -1474,6 +1696,64 @@ function presentPlaylistItem(entry) {
   };
 }
 
+function buildMusicPlaylistViews(scope = null, baseUrl = "") {
+  return [...database.musicPlaylists]
+    .filter((playlist) => !scope || scope.isOwner || musicPlaylistVisibleToScope(playlist.id, scope))
+    .sort(sortByName)
+    .map((playlist) => presentMusicPlaylist(playlist, baseUrl));
+}
+
+function musicPlaylistVisibleToScope(playlistId, scope) {
+  if (!scope) {
+    return true;
+  }
+
+  return database.musicChannels.some(
+    (channel) =>
+      channel.playlistId === playlistId &&
+      scope.canSeeClient(channel.clientId) &&
+      scope.canSeeTargetedRecord(channel.clientId, getMusicChannelLocationIds(channel.id))
+  );
+}
+
+function presentMusicPlaylist(playlist, baseUrl = "") {
+  return {
+    ...playlist,
+    items: database.musicPlaylistTracks
+      .filter((entry) => entry.playlistId === playlist.id)
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+      .map((entry) => presentMusicPlaylistTrack(entry, baseUrl))
+  };
+}
+
+function presentMusicPlaylistTrack(entry, baseUrl = "") {
+  const track = findById(database.musicTracks, entry.trackId);
+  return {
+    ...entry,
+    trackTitle: track?.title || "",
+    artist: track?.artist || "",
+    album: track?.album || "",
+    durationSeconds: Number(track?.durationSeconds || 0) || 0,
+    status: track?.status || "",
+    url: track && baseUrl ? `${baseUrl}/uploads/${track.fileName}` : "",
+    checksum: track?.checksum || "",
+    contentVersion: Number(track?.contentVersion || 1) || 1
+  };
+}
+
+function presentMusicChannel(channel) {
+  const client = findById(database.clients, channel.clientId);
+  const playlist = findById(database.musicPlaylists, channel.playlistId);
+  const locationIds = getMusicChannelLocationIds(channel.id);
+  return {
+    ...channel,
+    clientName: client?.name || "",
+    playlistName: playlist?.name || "",
+    locationIds,
+    locationNames: locationIds.map((locationId) => findById(database.locations, locationId)?.name || "").filter(Boolean)
+  };
+}
+
 function presentChannel(channel) {
   return {
     ...channel,
@@ -1612,6 +1892,15 @@ function enrichMedia(media, baseUrl) {
   };
 }
 
+function enrichMusicTrack(track, baseUrl) {
+  return {
+    ...track,
+    checksum: track.checksum || "",
+    contentVersion: Number(track.contentVersion || 1) || 1,
+    url: `${baseUrl}/uploads/${track.fileName}`
+  };
+}
+
 function findDevice(deviceId, serial) {
   if (deviceId) {
     return findById(database.devices, String(deviceId));
@@ -1619,6 +1908,24 @@ function findDevice(deviceId, serial) {
 
   if (serial) {
     return database.devices.find((entry) => entry.serial === normalizeSerial(String(serial))) || null;
+  }
+
+  return null;
+}
+
+function findPlayerReportDevice(body, secret) {
+  if (!secret) {
+    return null;
+  }
+
+  const deviceId = String(body?.deviceId || "").trim();
+  if (deviceId) {
+    return database.devices.find((entry) => entry.id === deviceId && entry.secret === secret) || null;
+  }
+
+  const serial = normalizeSerial(String(body?.serial || body?.deviceSerial || ""));
+  if (serial) {
+    return database.devices.find((entry) => entry.serial === serial && entry.secret === secret) || null;
   }
 
   return null;
@@ -1703,6 +2010,18 @@ function syncPlaylistItemLocations(playlistItemId, locationIds) {
   );
 }
 
+function syncMusicChannelLocations(musicChannelId, locationIds) {
+  database.musicChannelLocations = database.musicChannelLocations.filter((entry) => entry.musicChannelId !== musicChannelId);
+  database.musicChannelLocations.push(
+    ...locationIds.map((locationId) => ({
+      id: randomUUID(),
+      musicChannelId,
+      locationId,
+      createdAt: nowIso()
+    }))
+  );
+}
+
 function getChannelLocationIds(channelId) {
   return database.channelLocations
     .filter((entry) => entry.channelId === channelId)
@@ -1712,6 +2031,12 @@ function getChannelLocationIds(channelId) {
 function getPlaylistItemLocationIds(playlistItemId) {
   return database.playlistItemLocations
     .filter((entry) => entry.playlistItemId === playlistItemId)
+    .map((entry) => entry.locationId);
+}
+
+function getMusicChannelLocationIds(musicChannelId) {
+  return database.musicChannelLocations
+    .filter((entry) => entry.musicChannelId === musicChannelId)
     .map((entry) => entry.locationId);
 }
 
@@ -1853,6 +2178,44 @@ function validatePlaybackEvent(event) {
   return "";
 }
 
+function buildMusicChannelRecord(body, current = null) {
+  return {
+    id: current?.id || randomUUID(),
+    clientId: String(body?.clientId || current?.clientId || "").trim(),
+    playlistId: String(body?.playlistId || current?.playlistId || "").trim(),
+    name: String(body?.name || current?.name || "").trim(),
+    isActive: body?.isActive ?? current?.isActive ?? true,
+    notes: String(body?.notes ?? current?.notes ?? "").trim(),
+    createdAt: current?.createdAt || nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+function validateMusicChannel(channel, user, locationIds = []) {
+  const client = findById(database.clients, channel.clientId);
+  if (!client) {
+    return "Kanał muzyczny wymaga poprawnego klienta.";
+  }
+
+  if (!findById(database.musicPlaylists, channel.playlistId)) {
+    return "Kanał muzyczny wymaga playlisty muzycznej.";
+  }
+
+  if (!channel.name) {
+    return "Kanał muzyczny wymaga nazwy.";
+  }
+
+  if (!locationsBelongToClient(locationIds, channel.clientId)) {
+    return "Lokalizacje kanału muzycznego muszą należeć do tego klienta.";
+  }
+
+  if (!canManageTargetedLocations(user, channel.clientId, locationIds)) {
+    return "Brak dostępu do tego klienta lub lokalizacji.";
+  }
+
+  return "";
+}
+
 function matchesScheduleNow(schedule) {
   const now = new Date();
   const nowTime = now.getHours() * 60 + now.getMinutes();
@@ -1916,6 +2279,50 @@ function sortProofOfPlayDesc(left, right) {
       new Date(left.occurredAt || left.createdAt || 0).getTime() ||
     new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
   );
+}
+
+function filterProofOfPlayReport(records, filters, scope) {
+  const query = String(filters.query || "").trim().toLowerCase();
+  return records.filter((entry) => {
+    const presented = presentProofOfPlay(entry);
+    if (!scope.canSeeDevice(findById(database.devices, entry.deviceId))) {
+      return false;
+    }
+    if (filters.clientId && presented.clientId !== filters.clientId) {
+      return false;
+    }
+    if (filters.locationId && presented.locationId !== filters.locationId) {
+      return false;
+    }
+    if (filters.deviceId && entry.deviceId !== filters.deviceId) {
+      return false;
+    }
+    if (filters.status && presented.status !== filters.status) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+
+    return [
+      presented.deviceName,
+      presented.deviceSerial,
+      presented.clientName,
+      presented.channelName,
+      presented.locationName,
+      presented.locationLabel,
+      presented.mediaTitle,
+      presented.mediaId,
+      presented.playlistId,
+      presented.scheduleId,
+      presented.checksum,
+      presented.errorMessage,
+      presented.appVersion
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
 }
 
 function sortByPriorityDesc(left, right) {
@@ -1989,6 +2396,12 @@ function normalizeDeviceCommandStatus(value) {
 function normalizeMediaKind(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return mediaKinds.has(normalized) ? normalized : "video";
+}
+
+function isAudioUpload(file) {
+  const mimeType = String(file?.mimetype || "").toLowerCase();
+  const extension = extname(file?.originalname || "").toLowerCase();
+  return mimeType.startsWith("audio/") || [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"].includes(extension);
 }
 
 function normalizePlaybackEventType(value) {
@@ -2103,6 +2516,32 @@ function buildUserScope(user) {
   };
 }
 
+function canManageTargetedLocations(user, clientId, locationIds) {
+  if (user?.role === "owner") {
+    return true;
+  }
+
+  const clientAccess = database.userClients.find((entry) => entry.userId === user?.id && entry.clientId === clientId);
+  if (!clientAccess) {
+    return false;
+  }
+
+  if (clientAccess.allLocations !== false) {
+    return true;
+  }
+
+  if (!locationIds.length) {
+    return false;
+  }
+
+  const allowedLocationIds = new Set(
+    database.userLocationAccesses
+      .filter((entry) => entry.userId === user?.id && entry.clientId === clientId)
+      .map((entry) => entry.locationId)
+  );
+  return locationIds.every((locationId) => allowedLocationIds.has(locationId));
+}
+
 function sanitizeUser(user) {
   const userClients = database?.userClients?.filter((entry) => entry.userId === user.id) || [];
   const locationAccesses = userClients.map((entry) => ({
@@ -2193,6 +2632,11 @@ async function loadDatabase() {
       channelLocations: Array.isArray(parsed.channelLocations) ? parsed.channelLocations : [],
       channels: Array.isArray(parsed.channels) ? parsed.channels : [],
       media: Array.isArray(parsed.media) ? parsed.media : [],
+      musicTracks: Array.isArray(parsed.musicTracks) ? parsed.musicTracks : [],
+      musicPlaylists: Array.isArray(parsed.musicPlaylists) ? parsed.musicPlaylists : [],
+      musicPlaylistTracks: Array.isArray(parsed.musicPlaylistTracks) ? parsed.musicPlaylistTracks : [],
+      musicChannels: Array.isArray(parsed.musicChannels) ? parsed.musicChannels : [],
+      musicChannelLocations: Array.isArray(parsed.musicChannelLocations) ? parsed.musicChannelLocations : [],
       playlists: Array.isArray(parsed.playlists) ? parsed.playlists : [],
       playlistItems: Array.isArray(parsed.playlistItems) ? parsed.playlistItems : [],
       playlistItemLocations: Array.isArray(parsed.playlistItemLocations) ? parsed.playlistItemLocations : [],
@@ -2213,6 +2657,11 @@ async function loadDatabase() {
       channelLocations: [],
       channels: [],
       media: [],
+      musicTracks: [],
+      musicPlaylists: [],
+      musicPlaylistTracks: [],
+      musicChannels: [],
+      musicChannelLocations: [],
       playlists: [],
       playlistItems: [],
       playlistItemLocations: [],

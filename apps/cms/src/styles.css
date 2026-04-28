@@ -687,6 +687,20 @@ button:disabled {
   padding-right: 0.2rem;
 }
 
+.compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.42rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.vertical-card {
+  align-items: stretch;
+  flex-direction: column;
+}
+
 .location-row {
   align-items: flex-start;
 }

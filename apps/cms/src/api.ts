@@ -1,4 +1,4 @@
-import type { BootstrapPayload, DeviceCommandType } from "./types";
+import type { BootstrapPayload, DeviceCommandType, ProofOfPlayStatus } from "./types";
 
 const localApiBase =
   typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : "http://localhost:3000";
@@ -73,6 +73,31 @@ export async function logout(token: string) {
 
 export async function fetchBootstrap(token: string) {
   return requestJson<BootstrapPayload>("/api/bootstrap", { token });
+}
+
+export async function fetchProofOfPlayReport(
+  token: string,
+  filters: {
+    clientId?: string;
+    locationId?: string;
+    deviceId?: string;
+    status?: ProofOfPlayStatus | "";
+    query?: string;
+    limit?: number;
+  }
+) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const query = params.toString();
+  return requestJson<{
+    proofOfPlay: BootstrapPayload["proofOfPlay"];
+    total: number;
+    limit: number;
+  }>(`/api/proof-of-play${query ? `?${query}` : ""}`, { token });
 }
 
 export async function createUser(
@@ -232,6 +257,72 @@ export async function uploadMedia(token: string, payload: FormData) {
 
 export async function deleteMedia(token: string, mediaId: string) {
   return requestJson<{ ok: true }>(`/api/media/${mediaId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
+export async function createMusicTrack(token: string, payload: FormData) {
+  return requestJson<{ musicTrack: BootstrapPayload["musicTracks"][number] }>("/api/music/tracks", {
+    method: "POST",
+    token,
+    body: payload
+  });
+}
+
+export async function deleteMusicTrack(token: string, trackId: string) {
+  return requestJson<{ ok: true }>(`/api/music/tracks/${trackId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
+export async function createMusicPlaylist(
+  token: string,
+  payload: { name: string; description: string; isActive: boolean }
+) {
+  return requestJson<{ musicPlaylist: BootstrapPayload["musicPlaylists"][number] }>("/api/music/playlists", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function addMusicPlaylistTrack(
+  token: string,
+  playlistId: string,
+  payload: { trackId: string; sortOrder: number; volumePercent: number }
+) {
+  return requestJson<{ musicPlaylistTrack: BootstrapPayload["musicPlaylists"][number]["items"][number] }>(
+    `/api/music/playlists/${playlistId}/tracks`,
+    {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function deleteMusicPlaylistTrack(token: string, playlistId: string, itemId: string) {
+  return requestJson<{ ok: true }>(`/api/music/playlists/${playlistId}/tracks/${itemId}`, {
+    method: "DELETE",
+    token
+  });
+}
+
+export async function createMusicChannel(
+  token: string,
+  payload: { clientId: string; playlistId: string; name: string; locationIds: string[]; isActive: boolean; notes: string }
+) {
+  return requestJson<{ musicChannel: BootstrapPayload["musicChannels"][number] }>("/api/music/channels", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteMusicChannel(token: string, channelId: string) {
+  return requestJson<{ ok: true }>(`/api/music/channels/${channelId}`, {
     method: "DELETE",
     token
   });
