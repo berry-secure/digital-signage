@@ -17,9 +17,10 @@ class FakeCmsClient(CmsClient):
 
     def post_session(self, payload):
         self.sessions.append(payload)
+        device_index = len(self.sessions)
         return {
             "approvalStatus": "approved",
-            "device": {"approvalStatus": "approved", "desiredDisplayState": "active"},
+            "device": {"id": f"device-{device_index}", "approvalStatus": "approved", "desiredDisplayState": "active"},
             "playback": {
                 "mode": "playlist",
                 "queue": [
@@ -46,8 +47,8 @@ class FakeProofReporter:
         self.stopped = []
         self.flushed = 0
 
-    def start_output(self, output, serial, secret, queue, is_running):
-        self.started.append((output, serial, [item["id"] for item in queue]))
+    def start_output(self, output, serial, secret, device_id, queue, is_running):
+        self.started.append((output, serial, device_id, [item["id"] for item in queue]))
 
     def stop_output(self, output):
         self.stopped.append(output)
@@ -139,8 +140,8 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertEqual(
                 proof.started,
                 [
-                    ("HDMI-A-1", "MK5ABC123A", ["item:0", "item:1"]),
-                    ("HDMI-A-2", "MK5ABC123B", ["item:0", "item:1"]),
+                    ("HDMI-A-1", "MK5ABC123A", "device-1", ["item:0", "item:1"]),
+                    ("HDMI-A-2", "MK5ABC123B", "device-2", ["item:0", "item:1"]),
                 ],
             )
 
@@ -157,6 +158,7 @@ class AgentRuntimeTest(unittest.TestCase):
 
             self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1", "HDMI-A-2"])
             self.assertEqual([entry[0] for entry in proof.started], ["HDMI-A-1", "HDMI-A-2"])
+            self.assertEqual([entry[2] for entry in proof.started], ["device-1", "device-2"])
 
     def test_poll_once_skips_disconnected_output(self):
         with tempfile.TemporaryDirectory() as directory:

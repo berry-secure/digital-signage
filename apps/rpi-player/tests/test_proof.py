@@ -22,6 +22,7 @@ class ProofOfPlayTest(unittest.TestCase):
         payload = build_proof_payload(
             serial="MK5ABC123A",
             secret="secret",
+            device_id="device-1",
             output="HDMI-A-1",
             event_type="started",
             item={
@@ -43,6 +44,8 @@ class ProofOfPlayTest(unittest.TestCase):
         )
 
         self.assertEqual(payload["serial"], "MK5ABC123A")
+        self.assertEqual(payload["deviceId"], "device-1")
+        self.assertEqual(payload["deviceSecret"], "secret")
         self.assertEqual(payload["output"], "HDMI-A-1")
         self.assertEqual(payload["eventType"], "started")
         self.assertEqual(payload["itemId"], "playlist-item-1:0")

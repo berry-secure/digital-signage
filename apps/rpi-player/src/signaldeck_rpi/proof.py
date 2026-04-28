@@ -24,6 +24,7 @@ def build_proof_payload(
     app_version: str,
     occurred_at: str | None = None,
     playback_started_at: str | None = None,
+    device_id: str = "",
 ) -> dict[str, Any]:
     occurred = occurred_at or _iso_now()
     started = playback_started_at or occurred
@@ -41,6 +42,8 @@ def build_proof_payload(
         "localId": local_id,
         "serial": serial,
         "secret": secret,
+        "deviceId": device_id,
+        "deviceSecret": secret,
         "output": output,
         "eventType": event_type,
         "occurredAt": occurred,
@@ -134,6 +137,7 @@ class ProofOfPlayReporter:
         output: str,
         serial: str,
         secret: str,
+        device_id: str,
         queue: list[dict[str, Any]],
         is_running: Callable[[], bool],
     ) -> None:
@@ -141,7 +145,7 @@ class ProofOfPlayReporter:
         stop_event = threading.Event()
         thread = threading.Thread(
             target=self._run_output_loop,
-            args=(output, serial, secret, list(queue), is_running, stop_event),
+            args=(output, serial, secret, device_id, list(queue), is_running, stop_event),
             name=f"signaldeck-proof-{output}",
             daemon=True,
         )
@@ -165,10 +169,21 @@ class ProofOfPlayReporter:
         secret: str,
         queue: list[dict[str, Any]],
         event_type: str,
+        device_id: str = "",
     ) -> None:
         if not queue:
             return
-        payload = build_proof_payload(serial, secret, output, event_type, queue[0], 0, 0, self.app_version)
+        payload = build_proof_payload(
+            serial,
+            secret,
+            output,
+            event_type,
+            queue[0],
+            0,
+            0,
+            self.app_version,
+            device_id=device_id,
+        )
         self._send_or_spool(payload)
 
     def flush_pending(self) -> int:
@@ -182,6 +197,7 @@ class ProofOfPlayReporter:
         output: str,
         serial: str,
         secret: str,
+        device_id: str,
         queue: list[dict[str, Any]],
         is_running: Callable[[], bool],
         stop_event: threading.Event,
@@ -193,10 +209,10 @@ class ProofOfPlayReporter:
             for queue_index, item in enumerate(queue):
                 if stop_event.is_set() or not is_running():
                     return
-                self._report_item(serial, secret, output, "started", item, queue_index, loop_index, playback_started_at)
+                self._report_item(serial, secret, device_id, output, "started", item, queue_index, loop_index, playback_started_at)
                 completed = self._wait_for_item(item, stop_event, is_running)
                 event_type = "finished" if completed else "interrupted"
-                self._report_item(serial, secret, output, event_type, item, queue_index, loop_index, playback_started_at)
+                self._report_item(serial, secret, device_id, output, event_type, item, queue_index, loop_index, playback_started_at)
                 if not completed:
                     return
             loop_index += 1
@@ -215,6 +231,7 @@ class ProofOfPlayReporter:
         self,
         serial: str,
         secret: str,
+        device_id: str,
         output: str,
         event_type: str,
         item: dict[str, Any],
@@ -232,6 +249,7 @@ class ProofOfPlayReporter:
             loop_index,
             self.app_version,
             playback_started_at=playback_started_at,
+            device_id=device_id,
         )
         self._send_or_spool(payload)
 

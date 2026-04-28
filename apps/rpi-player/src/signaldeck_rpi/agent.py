@@ -23,6 +23,7 @@ LOGGER = logging.getLogger("signaldeck.agent")
 class OutputState:
     approval_status: str = "pending"
     desired_display_state: str = "active"
+    device_id: str = ""
     active_item_title: str = ""
     last_sync_at: str = ""
     last_message: str = ""
@@ -107,6 +108,7 @@ class AgentRuntime:
     def _update_state(self, output: str, response: dict[str, Any]) -> None:
         state = self.states.setdefault(output, OutputState())
         device = response.get("device") if isinstance(response.get("device"), dict) else {}
+        state.device_id = str(device.get("id") or state.device_id)
         state.approval_status = str(response.get("approvalStatus") or device.get("approvalStatus") or state.approval_status)
         state.desired_display_state = str(device.get("desiredDisplayState") or state.desired_display_state)
         state.last_sync_at = str(response.get("serverTime") or state.last_sync_at)
@@ -149,7 +151,7 @@ class AgentRuntime:
                 _first_image_duration(playable_items),
             )
             self.playback_controller.play(output, command)
-            self._start_proof(output, serial, secret, playable_items)
+            self._start_proof(output, serial, secret, state.device_id, playable_items)
             state.current_item_id = queue_id
             LOGGER.info("started playback on %s with %s queued item(s)", output, len(playable_items))
         except Exception as error:
@@ -178,13 +180,14 @@ class AgentRuntime:
         connector = states.get(output)
         return True if connector is None else connector.connected
 
-    def _start_proof(self, output: str, serial: str, secret: str, queue: list[dict[str, Any]]) -> None:
+    def _start_proof(self, output: str, serial: str, secret: str, device_id: str, queue: list[dict[str, Any]]) -> None:
         if not self.proof_reporter:
             return
         self.proof_reporter.start_output(
             output,
             serial,
             secret,
+            device_id,
             queue,
             lambda output_name=output: self.playback_controller.is_running(output_name),
         )

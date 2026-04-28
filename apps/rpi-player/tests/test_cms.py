@@ -48,7 +48,7 @@ class CmsClientTest(unittest.TestCase):
         self.assertEqual(requests[0][0], "https://cms.example.test/api/player/session")
         self.assertEqual(requests[1][0], "https://cms.example.test/api/player/commands/command-1/ack")
         self.assertEqual(requests[2][0], "https://cms.example.test/api/player/logs")
-        self.assertEqual(requests[3][0], "https://cms.example.test/api/player/proof-of-play")
+        self.assertEqual(requests[3][0], "https://cms.example.test/api/proof-of-play")
         self.assertEqual(requests[2][1]["severity"], "warn")
         self.assertEqual(requests[3][1]["eventType"], "started")
         self.assertEqual(requests[0][2], 2)
