@@ -1,11 +1,15 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
+  addMusicPlaylistTrack,
   approveDevice,
   clearToken,
   createChannel,
   createClient,
   createLocation,
+  createMusicChannel,
+  createMusicPlaylist,
+  createMusicTrack,
   createPlaylist,
   createPlaylistItem,
   createPlaybackEvent,
@@ -16,12 +20,16 @@ import {
   deleteDevice,
   deleteLocation,
   deleteMedia,
+  deleteMusicChannel,
+  deleteMusicPlaylistTrack,
+  deleteMusicTrack,
   deletePlaylist,
   deletePlaylistItem,
   deletePlaybackEvent,
   deleteSchedule,
   deleteUser,
   fetchBootstrap,
+  fetchProofOfPlayReport,
   getApiBaseUrl,
   getStoredToken,
   issueDeviceCommand,
@@ -50,7 +58,6 @@ import {
 } from "./deviceCenter";
 import {
   buildProofOfPlayCsv,
-  filterProofOfPlay,
   summarizeProofOfPlay,
   type ProofOfPlayFilters
 } from "./proofOfPlay";
@@ -65,6 +72,8 @@ import type {
   LocationRecord,
   MediaKind,
   MediaRecord,
+  MusicChannelRecord,
+  MusicPlaylistRecord,
   PlaybackEventRecord,
   ProofOfPlayRecord,
   PlaylistRecord,
@@ -79,6 +88,8 @@ type SectionKey =
   | "clients"
   | "channels"
   | "media"
+  | "music"
+  | "musicAdmin"
   | "playlists"
   | "events"
   | "schedule"
@@ -134,6 +145,38 @@ type MediaFormState = {
   status: "draft" | "published";
   tags: string;
   file: File | null;
+};
+
+type MusicTrackFormState = {
+  title: string;
+  artist: string;
+  album: string;
+  durationSeconds: string;
+  status: "draft" | "published";
+  licenseNotes: string;
+  file: File | null;
+};
+
+type MusicPlaylistFormState = {
+  name: string;
+  description: string;
+  isActive: boolean;
+};
+
+type MusicPlaylistTrackFormState = {
+  playlistId: string;
+  trackId: string;
+  sortOrder: string;
+  volumePercent: string;
+};
+
+type MusicChannelFormState = {
+  clientId: string;
+  playlistId: string;
+  name: string;
+  locationIds: string[];
+  isActive: boolean;
+  notes: string;
 };
 
 type PlaybackEventFormState = {
@@ -220,6 +263,8 @@ const navItems: Array<{ key: SectionKey; label: string; hint: string }> = [
   { key: "clients", label: "Klienci", hint: "firmy i lokalizacje" },
   { key: "channels", label: "Kanały", hint: "grupy emisji" },
   { key: "media", label: "Media", hint: "video i obrazy" },
+  { key: "music", label: "Muzyka", hint: "kanały audio" },
+  { key: "musicAdmin", label: "Muzyka Admin", hint: "licencje i utwory" },
   { key: "playlists", label: "Playlisty", hint: "kolejność materiałów" },
   { key: "events", label: "Eventy", hint: "komunikaty w emisji" },
   { key: "schedule", label: "Harmonogramy", hint: "emisja wg czasu" },
@@ -276,6 +321,9 @@ const emptyBootstrap: BootstrapPayload = {
   locations: [],
   channels: [],
   media: [],
+  musicTracks: [],
+  musicPlaylists: [],
+  musicChannels: [],
   playlists: [],
   schedules: [],
   devices: [],
@@ -331,6 +379,38 @@ const emptyMediaForm: MediaFormState = {
   status: "published",
   tags: "",
   file: null
+};
+
+const emptyMusicTrackForm: MusicTrackFormState = {
+  title: "",
+  artist: "",
+  album: "",
+  durationSeconds: "180",
+  status: "published",
+  licenseNotes: "",
+  file: null
+};
+
+const emptyMusicPlaylistForm: MusicPlaylistFormState = {
+  name: "",
+  description: "",
+  isActive: true
+};
+
+const emptyMusicPlaylistTrackForm: MusicPlaylistTrackFormState = {
+  playlistId: "",
+  trackId: "",
+  sortOrder: "10",
+  volumePercent: "100"
+};
+
+const emptyMusicChannelForm: MusicChannelFormState = {
+  clientId: "",
+  playlistId: "",
+  name: "",
+  locationIds: [],
+  isActive: true,
+  notes: ""
 };
 
 const emptyPlaylistForm: PlaylistFormState = {
@@ -443,7 +523,14 @@ function App() {
   const [locationForm, setLocationForm] = useState<LocationFormState>(emptyLocationForm);
   const [channelForm, setChannelForm] = useState<ChannelFormState>(emptyChannelForm);
   const [mediaForm, setMediaForm] = useState<MediaFormState>(emptyMediaForm);
+  const [mediaClientFilter, setMediaClientFilter] = useState("");
   const [mediaInputKey, setMediaInputKey] = useState(0);
+  const [musicTrackForm, setMusicTrackForm] = useState<MusicTrackFormState>(emptyMusicTrackForm);
+  const [musicTrackInputKey, setMusicTrackInputKey] = useState(0);
+  const [musicPlaylistForm, setMusicPlaylistForm] = useState<MusicPlaylistFormState>(emptyMusicPlaylistForm);
+  const [musicPlaylistTrackForm, setMusicPlaylistTrackForm] =
+    useState<MusicPlaylistTrackFormState>(emptyMusicPlaylistTrackForm);
+  const [musicChannelForm, setMusicChannelForm] = useState<MusicChannelFormState>(emptyMusicChannelForm);
   const [playlistForm, setPlaylistForm] = useState<PlaylistFormState>(emptyPlaylistForm);
   const [playlistItemForm, setPlaylistItemForm] = useState<PlaylistItemFormState>(emptyPlaylistItemForm);
   const [playbackEventForm, setPlaybackEventForm] = useState<PlaybackEventFormState>(emptyPlaybackEventForm);
@@ -454,14 +541,19 @@ function App() {
   const [appliedDeviceLogFilters, setAppliedDeviceLogFilters] = useState<DeviceLogFilters>(emptyDeviceLogFilters);
   const [deviceLogsRequested, setDeviceLogsRequested] = useState(false);
   const [proofReportFilters, setProofReportFilters] = useState<ProofReportFilters>(emptyProofReportFilters);
-  const [appliedProofReportFilters, setAppliedProofReportFilters] = useState<ProofReportFilters>(emptyProofReportFilters);
   const [proofReportsRequested, setProofReportsRequested] = useState(false);
+  const [proofReportRows, setProofReportRows] = useState<ProofOfPlayRecord[]>([]);
+  const [proofReportTotal, setProofReportTotal] = useState(0);
+  const [proofReportLoading, setProofReportLoading] = useState(false);
   const [deviceCommandDrafts, setDeviceCommandDrafts] = useState<Record<string, DeviceCommandType>>({});
 
   const clients = dashboard.clients;
   const locations = dashboard.locations || [];
   const channels = dashboard.channels;
   const media = dashboard.media;
+  const musicTracks = dashboard.musicTracks || [];
+  const musicPlaylists = dashboard.musicPlaylists || [];
+  const musicChannels = dashboard.musicChannels || [];
   const playlists = dashboard.playlists;
   const schedules = dashboard.schedules;
   const devices = dashboard.devices;
@@ -486,17 +578,34 @@ function App() {
     [appliedDeviceLogFilters, deviceLogs, deviceLogsRequested, devices]
   );
   const visibleDeviceLogs = filteredDeviceLogs.slice(0, 250);
-  const filteredProofOfPlay = useMemo(
-    () => (proofReportsRequested ? filterProofOfPlay(proofOfPlay, appliedProofReportFilters) : []),
-    [appliedProofReportFilters, proofOfPlay, proofReportsRequested]
-  );
-  const visibleProofOfPlay = filteredProofOfPlay.slice(0, 250);
-  const proofSummary = useMemo(() => summarizeProofOfPlay(filteredProofOfPlay), [filteredProofOfPlay]);
+  const visibleProofOfPlay = proofReportsRequested ? proofReportRows.slice(0, 250) : [];
+  const proofSummary = useMemo(() => summarizeProofOfPlay(proofReportsRequested ? proofReportRows : []), [proofReportRows, proofReportsRequested]);
 
   const clientLookup = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
   const locationLookup = useMemo(() => new Map(locations.map((location) => [location.id, location])), [locations]);
   const channelLookup = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
   const mediaLookup = useMemo(() => new Map(media.map((entry) => [entry.id, entry])), [media]);
+  const musicPlaylistLookup = useMemo(
+    () => new Map(musicPlaylists.map((playlist) => [playlist.id, playlist])),
+    [musicPlaylists]
+  );
+  const filteredMediaForLibrary = useMemo(
+    () => (mediaClientFilter ? media.filter((entry) => entry.clientId === mediaClientFilter) : []),
+    [media, mediaClientFilter]
+  );
+  const filteredMusicLocations = useMemo(
+    () => locations.filter((location) => !musicChannelForm.clientId || location.clientId === musicChannelForm.clientId),
+    [locations, musicChannelForm.clientId]
+  );
+  const filteredMusicChannels = useMemo(
+    () =>
+      musicChannels.filter(
+        (channel) =>
+          (!musicChannelForm.clientId || channel.clientId === musicChannelForm.clientId) &&
+          (!musicChannelForm.playlistId || channel.playlistId === musicChannelForm.playlistId)
+      ),
+    [musicChannelForm.clientId, musicChannelForm.playlistId, musicChannels]
+  );
   const locationsForUserForm = useMemo(
     () => locations.filter((location) => !userForm.clientIds.length || userForm.clientIds.includes(location.clientId)),
     [locations, userForm.clientIds]
@@ -844,7 +953,7 @@ function App() {
   }
 
   function downloadProofOfPlayCsv() {
-    const csv = buildProofOfPlayCsv(filteredProofOfPlay);
+    const csv = buildProofOfPlayCsv(proofReportRows);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -852,6 +961,24 @@ function App() {
     link.download = `proof-of-play-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function loadProofOfPlayReport() {
+    if (!token) {
+      return;
+    }
+
+    setProofReportLoading(true);
+    try {
+      const report = await fetchProofOfPlayReport(token, { ...proofReportFilters, limit: 1000 });
+      setProofReportRows(report.proofOfPlay);
+      setProofReportTotal(report.total);
+      setProofReportsRequested(true);
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setProofReportLoading(false);
+    }
   }
 
   function toggleScheduleDay(day: number) {
@@ -880,6 +1007,7 @@ function App() {
     { label: "Lokalizacje", value: locations.length, hint: "site’y" },
     { label: "Kanały", value: channels.length, hint: "emisja" },
     { label: "Media", value: media.length, hint: "pliki" },
+    { label: "Kanały muzyczne", value: musicChannels.length, hint: "audio" },
     { label: "Playlisty", value: playlists.length, hint: "kolejki" },
     { label: "Eventy", value: playbackEvents.length, hint: "komunikaty" },
     { label: "Harmonogramy", value: schedules.length, hint: "reguły czasu" },
@@ -939,7 +1067,7 @@ function App() {
         </div>
 
         <nav className="sidebar-nav" aria-label="Sekcje CMS">
-          {navItems.map((item) => (
+          {navItems.filter((item) => item.key !== "musicAdmin" || dashboard.user.role === "owner").map((item) => (
             <button
               key={item.key}
               className={`nav-button ${activeSection === item.key ? "active" : ""}`}
@@ -1690,7 +1818,7 @@ function App() {
               >
                 <header className="panel-header">
                   <h3>Dodaj plik</h3>
-                  <span>jeden backend, jeden storage</span>
+                  <span>{clients.length} klientów</span>
                 </header>
                 <Field label="Klient" htmlFor="media-client">
                   <select
@@ -1808,11 +1936,26 @@ function App() {
               <article className="panel">
                 <header className="panel-header">
                   <h3>Biblioteka</h3>
-                  <span>{media.length}</span>
+                  <span>{filteredMediaForLibrary.length}</span>
                 </header>
-                {media.length ? (
+                <Field label="Klient" htmlFor="media-library-client">
+                  <select
+                    id="media-library-client"
+                    name="media-library-client"
+                    value={mediaClientFilter}
+                    onChange={(event) => setMediaClientFilter(event.target.value)}
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                {mediaClientFilter && filteredMediaForLibrary.length ? (
                   <div className="list-stack">
-                    {media.map((entry) => (
+                    {filteredMediaForLibrary.map((entry) => (
                       <div key={entry.id} className="list-card">
                         <div>
                           <strong>{entry.title}</strong>
@@ -1841,8 +1984,506 @@ function App() {
                       </div>
                     ))}
                   </div>
+                ) : mediaClientFilter ? (
+                  <EmptyState text="Ten klient nie ma jeszcze plików media." />
                 ) : (
-                  <EmptyState text="Biblioteka jest pusta. Wrzuć pierwszy plik video albo obraz." />
+                  <EmptyState text="Wybierz klienta, żeby wyświetlić jego media." />
+                )}
+              </article>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "musicAdmin" && dashboard.user.role === "owner" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token || !musicTrackForm.file) {
+                    setFlash({ kind: "error", text: "Wybierz plik audio." });
+                    return;
+                  }
+                  const formData = new FormData();
+                  formData.append("title", musicTrackForm.title);
+                  formData.append("artist", musicTrackForm.artist);
+                  formData.append("album", musicTrackForm.album);
+                  formData.append("durationSeconds", musicTrackForm.durationSeconds);
+                  formData.append("status", musicTrackForm.status);
+                  formData.append("licenseNotes", musicTrackForm.licenseNotes);
+                  formData.append("file", musicTrackForm.file);
+                  void runMutation(
+                    async () => createMusicTrack(token, formData),
+                    "Utwór dodany do biblioteki muzycznej.",
+                    () => {
+                      setMusicTrackForm(emptyMusicTrackForm);
+                      setMusicTrackInputKey((current) => current + 1);
+                    }
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>Biblioteka utworów</h3>
+                  <span>{musicTracks.length}</span>
+                </header>
+                <Field label="Tytuł" htmlFor="music-track-title">
+                  <input
+                    id="music-track-title"
+                    name="music-track-title"
+                    value={musicTrackForm.title}
+                    onChange={(event) => setMusicTrackForm((current) => ({ ...current, title: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Artysta" htmlFor="music-track-artist">
+                    <input
+                      id="music-track-artist"
+                      name="music-track-artist"
+                      value={musicTrackForm.artist}
+                      onChange={(event) => setMusicTrackForm((current) => ({ ...current, artist: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Album" htmlFor="music-track-album">
+                    <input
+                      id="music-track-album"
+                      name="music-track-album"
+                      value={musicTrackForm.album}
+                      onChange={(event) => setMusicTrackForm((current) => ({ ...current, album: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <div className="inline-grid">
+                  <Field label="Sekundy" htmlFor="music-track-duration">
+                    <input
+                      id="music-track-duration"
+                      name="music-track-duration"
+                      type="number"
+                      min="1"
+                      value={musicTrackForm.durationSeconds}
+                      onChange={(event) => setMusicTrackForm((current) => ({ ...current, durationSeconds: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Status" htmlFor="music-track-status">
+                    <select
+                      id="music-track-status"
+                      name="music-track-status"
+                      value={musicTrackForm.status}
+                      onChange={(event) =>
+                        setMusicTrackForm((current) => ({ ...current, status: event.target.value as "draft" | "published" }))
+                      }
+                    >
+                      <option value="published">Published</option>
+                      <option value="draft">Draft</option>
+                    </select>
+                  </Field>
+                </div>
+                <Field label="Licencja" htmlFor="music-track-license">
+                  <input
+                    id="music-track-license"
+                    name="music-track-license"
+                    value={musicTrackForm.licenseNotes}
+                    onChange={(event) => setMusicTrackForm((current) => ({ ...current, licenseNotes: event.target.value }))}
+                  />
+                </Field>
+                <Field label="Plik" htmlFor="music-track-file">
+                  <input
+                    key={musicTrackInputKey}
+                    id="music-track-file"
+                    name="music-track-file"
+                    type="file"
+                    accept="audio/*"
+                    onChange={(event) =>
+                      setMusicTrackForm((current) => ({ ...current, file: event.target.files?.[0] || null }))
+                    }
+                    required
+                  />
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  Dodaj utwór
+                </button>
+              </form>
+
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token) {
+                    return;
+                  }
+                  void runMutation(
+                    async () => createMusicPlaylist(token, musicPlaylistForm),
+                    "Playlista muzyczna została utworzona.",
+                    () => setMusicPlaylistForm(emptyMusicPlaylistForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>Playlisty muzyczne</h3>
+                  <span>{musicPlaylists.length}</span>
+                </header>
+                <Field label="Nazwa" htmlFor="music-playlist-name">
+                  <input
+                    id="music-playlist-name"
+                    name="music-playlist-name"
+                    value={musicPlaylistForm.name}
+                    onChange={(event) => setMusicPlaylistForm((current) => ({ ...current, name: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <Field label="Opis" htmlFor="music-playlist-description">
+                  <input
+                    id="music-playlist-description"
+                    name="music-playlist-description"
+                    value={musicPlaylistForm.description}
+                    onChange={(event) => setMusicPlaylistForm((current) => ({ ...current, description: event.target.value }))}
+                  />
+                </Field>
+                <Field label="Status" htmlFor="music-playlist-active">
+                  <select
+                    id="music-playlist-active"
+                    name="music-playlist-active"
+                    value={musicPlaylistForm.isActive ? "yes" : "no"}
+                    onChange={(event) => setMusicPlaylistForm((current) => ({ ...current, isActive: event.target.value === "yes" }))}
+                  >
+                    <option value="yes">Aktywna</option>
+                    <option value="no">Wyłączona</option>
+                  </select>
+                </Field>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  Utwórz playlistę
+                </button>
+              </form>
+            </div>
+
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token || !musicPlaylistTrackForm.playlistId || !musicPlaylistTrackForm.trackId) {
+                    setFlash({ kind: "error", text: "Wybierz playlistę i utwór." });
+                    return;
+                  }
+                  void runMutation(
+                    async () =>
+                      addMusicPlaylistTrack(token, musicPlaylistTrackForm.playlistId, {
+                        trackId: musicPlaylistTrackForm.trackId,
+                        sortOrder: Number(musicPlaylistTrackForm.sortOrder || 10),
+                        volumePercent: Number(musicPlaylistTrackForm.volumePercent || 100)
+                      }),
+                    "Utwór dodany do playlisty.",
+                    () => setMusicPlaylistTrackForm((current) => ({ ...current, trackId: "" }))
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>Dodaj do playlisty</h3>
+                  <span>{musicPlaylists.reduce((sum, playlist) => sum + playlist.items.length, 0)} pozycji</span>
+                </header>
+                <Field label="Playlista" htmlFor="music-item-playlist">
+                  <select
+                    id="music-item-playlist"
+                    name="music-item-playlist"
+                    value={musicPlaylistTrackForm.playlistId}
+                    onChange={(event) => setMusicPlaylistTrackForm((current) => ({ ...current, playlistId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz playlistę</option>
+                    {musicPlaylists.map((playlist) => (
+                      <option key={playlist.id} value={playlist.id}>
+                        {playlist.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Utwór" htmlFor="music-item-track">
+                  <select
+                    id="music-item-track"
+                    name="music-item-track"
+                    value={musicPlaylistTrackForm.trackId}
+                    onChange={(event) => setMusicPlaylistTrackForm((current) => ({ ...current, trackId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz utwór</option>
+                    {musicTracks.map((track) => (
+                      <option key={track.id} value={track.id}>
+                        {track.title}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Kolejność" htmlFor="music-item-sort">
+                    <input
+                      id="music-item-sort"
+                      name="music-item-sort"
+                      type="number"
+                      value={musicPlaylistTrackForm.sortOrder}
+                      onChange={(event) => setMusicPlaylistTrackForm((current) => ({ ...current, sortOrder: event.target.value }))}
+                    />
+                  </Field>
+                  <Field label="Głośność" htmlFor="music-item-volume">
+                    <input
+                      id="music-item-volume"
+                      name="music-item-volume"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={musicPlaylistTrackForm.volumePercent}
+                      onChange={(event) => setMusicPlaylistTrackForm((current) => ({ ...current, volumePercent: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  Dodaj pozycję
+                </button>
+              </form>
+
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Utwory</h3>
+                  <span>{musicTracks.length}</span>
+                </header>
+                {musicTracks.length ? (
+                  <div className="list-stack">
+                    {musicTracks.slice(0, 120).map((track) => (
+                      <div key={track.id} className="list-card">
+                        <div>
+                          <strong>{track.title}</strong>
+                          <span>
+                            {track.artist || "bez artysty"} · {track.status} · {track.durationSeconds}s
+                          </span>
+                          <small>{track.licenseNotes || track.originalName}</small>
+                        </div>
+                        <div className="card-actions">
+                          <a className="ghost-button" href={track.url} target="_blank" rel="noreferrer">
+                            Otwórz
+                          </a>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć utwór ${track.title}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deleteMusicTrack(token, track.id), "Usunięto utwór.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Biblioteka utworów jest pusta." />
+                )}
+              </article>
+            </div>
+
+            <article className="panel">
+              <header className="panel-header">
+                <h3>Pozycje playlist</h3>
+                <span>{musicPlaylists.length}</span>
+              </header>
+              {musicPlaylists.length ? (
+                <div className="list-stack">
+                  {musicPlaylists.map((playlist) => (
+                    <div key={playlist.id} className="list-card vertical-card">
+                      <div>
+                        <strong>{playlist.name}</strong>
+                        <span>{playlist.description || "bez opisu"} · {playlist.isActive ? "aktywna" : "wyłączona"}</span>
+                      </div>
+                      {playlist.items.length ? (
+                        <div className="compact-list">
+                          {playlist.items.map((item) => (
+                            <div key={item.id} className="compact-row">
+                              <span>
+                                {item.sortOrder}. {item.trackTitle || item.trackId} · {item.volumePercent}%
+                              </span>
+                              <button
+                                className="ghost-button"
+                                type="button"
+                                onClick={() => {
+                                  if (!token) {
+                                    return;
+                                  }
+                                  void runMutation(
+                                    async () => deleteMusicPlaylistTrack(token, playlist.id, item.id),
+                                    "Usunięto pozycję z playlisty."
+                                  );
+                                }}
+                              >
+                                Usuń
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <small>Brak utworów</small>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState text="Nie ma jeszcze playlist muzycznych." />
+              )}
+            </article>
+          </section>
+        ) : null}
+
+        {activeSection === "music" ? (
+          <section className="section-stack">
+            <div className="card-grid two-columns">
+              <form
+                className="panel stack-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!token || !musicChannelForm.clientId || !musicChannelForm.playlistId || !musicChannelForm.name) {
+                    setFlash({ kind: "error", text: "Kanał muzyczny wymaga klienta, nazwy i playlisty." });
+                    return;
+                  }
+                  void runMutation(
+                    async () => createMusicChannel(token, musicChannelForm),
+                    "Kanał muzyczny został utworzony.",
+                    () => setMusicChannelForm(emptyMusicChannelForm)
+                  );
+                }}
+              >
+                <header className="panel-header">
+                  <h3>Kanał muzyczny</h3>
+                  <span>{musicChannels.length}</span>
+                </header>
+                <Field label="Klient" htmlFor="music-channel-client">
+                  <select
+                    id="music-channel-client"
+                    name="music-channel-client"
+                    value={musicChannelForm.clientId}
+                    onChange={(event) =>
+                      setMusicChannelForm((current) => ({ ...current, clientId: event.target.value, locationIds: [] }))
+                    }
+                    required
+                  >
+                    <option value="">Wybierz klienta</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Playlista" htmlFor="music-channel-playlist">
+                  <select
+                    id="music-channel-playlist"
+                    name="music-channel-playlist"
+                    value={musicChannelForm.playlistId}
+                    onChange={(event) => setMusicChannelForm((current) => ({ ...current, playlistId: event.target.value }))}
+                    required
+                  >
+                    <option value="">Wybierz playlistę</option>
+                    {musicPlaylists.map((playlist) => (
+                      <option key={playlist.id} value={playlist.id}>
+                        {playlist.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Nazwa" htmlFor="music-channel-name">
+                  <input
+                    id="music-channel-name"
+                    name="music-channel-name"
+                    value={musicChannelForm.name}
+                    onChange={(event) => setMusicChannelForm((current) => ({ ...current, name: event.target.value }))}
+                    required
+                  />
+                </Field>
+                <Field label="Lokalizacje" htmlFor="music-channel-locations">
+                  <div id="music-channel-locations" className="checkbox-grid">
+                    {filteredMusicLocations.map((location) => (
+                      <label key={location.id} className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={musicChannelForm.locationIds.includes(location.id)}
+                          onChange={() =>
+                            setMusicChannelForm((current) => ({
+                              ...current,
+                              locationIds: toggleValue(current.locationIds, location.id)
+                            }))
+                          }
+                        />
+                        <span>{location.name}</span>
+                      </label>
+                    ))}
+                    {!filteredMusicLocations.length ? <small>Brak lokalizacji dla wybranego klienta.</small> : null}
+                  </div>
+                </Field>
+                <div className="inline-grid">
+                  <Field label="Status" htmlFor="music-channel-active">
+                    <select
+                      id="music-channel-active"
+                      name="music-channel-active"
+                      value={musicChannelForm.isActive ? "yes" : "no"}
+                      onChange={(event) => setMusicChannelForm((current) => ({ ...current, isActive: event.target.value === "yes" }))}
+                    >
+                      <option value="yes">Aktywny</option>
+                      <option value="no">Wyłączony</option>
+                    </select>
+                  </Field>
+                  <Field label="Notatki" htmlFor="music-channel-notes">
+                    <input
+                      id="music-channel-notes"
+                      name="music-channel-notes"
+                      value={musicChannelForm.notes}
+                      onChange={(event) => setMusicChannelForm((current) => ({ ...current, notes: event.target.value }))}
+                    />
+                  </Field>
+                </div>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  Utwórz kanał
+                </button>
+              </form>
+
+              <article className="panel">
+                <header className="panel-header">
+                  <h3>Kanały audio</h3>
+                  <span>{filteredMusicChannels.length}</span>
+                </header>
+                {filteredMusicChannels.length ? (
+                  <div className="list-stack">
+                    {filteredMusicChannels.map((channel) => (
+                      <div key={channel.id} className="list-card">
+                        <div>
+                          <strong>{channel.name}</strong>
+                          <span>
+                            {channel.clientName || clientLookup.get(channel.clientId)?.name || "bez klienta"} ·{" "}
+                            {channel.playlistName || musicPlaylistLookup.get(channel.playlistId)?.name || "bez playlisty"}
+                          </span>
+                          <small>
+                            {channel.locationNames.length ? channel.locationNames.join(", ") : "wszystkie lokalizacje"} ·{" "}
+                            {channel.isActive ? "aktywny" : "wyłączony"}
+                          </small>
+                        </div>
+                        <div className="card-actions">
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() => {
+                              if (!token || !window.confirm(`Usunąć kanał ${channel.name}?`)) {
+                                return;
+                              }
+                              void runMutation(async () => deleteMusicChannel(token, channel.id), "Usunięto kanał muzyczny.");
+                            }}
+                          >
+                            Usuń
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState text="Wybierz klienta albo utwórz pierwszy kanał muzyczny." />
                 )}
               </article>
             </div>
@@ -3248,14 +3889,12 @@ function App() {
               <button
                 className="primary-button"
                 type="button"
-                onClick={() => {
-                  setAppliedProofReportFilters(proofReportFilters);
-                  setProofReportsRequested(true);
-                }}
+                onClick={() => void loadProofOfPlayReport()}
+                disabled={proofReportLoading}
               >
-                Pokaż logi
+                {proofReportLoading ? "Ładowanie..." : "Pokaż logi"}
               </button>
-              <button className="secondary-button" type="button" onClick={downloadProofOfPlayCsv} disabled={!filteredProofOfPlay.length}>
+              <button className="secondary-button" type="button" onClick={downloadProofOfPlayCsv} disabled={!proofReportRows.length}>
                 CSV
               </button>
               <button
@@ -3263,8 +3902,9 @@ function App() {
                 type="button"
                 onClick={() => {
                   setProofReportFilters(emptyProofReportFilters);
-                  setAppliedProofReportFilters(emptyProofReportFilters);
                   setProofReportsRequested(false);
+                  setProofReportRows([]);
+                  setProofReportTotal(0);
                 }}
                 disabled={
                   !proofReportFilters.clientId &&
@@ -3282,7 +3922,7 @@ function App() {
               <article className="stat-card">
                 <span>Zdarzenia</span>
                 <strong>{proofSummary.total}</strong>
-                <small>{proofReportsRequested ? `${filteredProofOfPlay.length} / ${proofOfPlay.length} po filtrach` : "wybierz zakres i pokaż"}</small>
+                <small>{proofReportsRequested ? `${proofReportRows.length} / ${proofReportTotal} po filtrach` : "wybierz zakres i pokaż"}</small>
               </article>
               <article className="stat-card">
                 <span>Started</span>
@@ -3309,7 +3949,7 @@ function App() {
             <article className="panel">
               <header className="panel-header">
                 <h3>Proof of Play</h3>
-                <span>{proofReportsRequested ? `${visibleProofOfPlay.length} z ${filteredProofOfPlay.length}` : "czeka na filtr"}</span>
+                <span>{proofReportsRequested ? `${visibleProofOfPlay.length} z ${proofReportRows.length}` : "czeka na filtr"}</span>
               </header>
               {proofReportsRequested && visibleProofOfPlay.length ? (
                 <div className="list-stack">

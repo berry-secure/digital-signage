@@ -10,6 +10,11 @@ type DatabaseShape = {
   channelLocations: any[];
   channels: any[];
   media: any[];
+  musicTracks: any[];
+  musicPlaylists: any[];
+  musicPlaylistTracks: any[];
+  musicChannels: any[];
+  musicChannelLocations: any[];
   playlists: any[];
   playlistItems: any[];
   playlistItemLocations: any[];
@@ -43,6 +48,11 @@ export function createEmptyDatabase(): DatabaseShape {
     channelLocations: [],
     channels: [],
     media: [],
+    musicTracks: [],
+    musicPlaylists: [],
+    musicPlaylistTracks: [],
+    musicChannels: [],
+    musicChannelLocations: [],
     playlists: [],
     playlistItems: [],
     playlistItemLocations: [],
@@ -85,6 +95,11 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
     channelLocations,
     channels,
     media,
+    musicTracks,
+    musicPlaylists,
+    musicPlaylistTracks,
+    musicChannels,
+    musicChannelLocations,
     playlists,
     playlistItems,
     playlistItemLocations,
@@ -103,6 +118,11 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
     prisma.channelLocation.findMany(),
     prisma.channel.findMany(),
     prisma.media.findMany(),
+    prisma.musicTrack.findMany(),
+    prisma.musicPlaylist.findMany(),
+    prisma.musicPlaylistTrack.findMany(),
+    prisma.musicChannel.findMany(),
+    prisma.musicChannelLocation.findMany(),
     prisma.playlist.findMany(),
     prisma.playlistItem.findMany(),
     prisma.playlistItemLocation.findMany(),
@@ -141,6 +161,17 @@ export async function loadPrismaDatabase(prisma: any): Promise<DatabaseShape> {
       ...withIsoDates(entry),
       kind: String(entry.kind),
       status: String(entry.status)
+    })),
+    musicTracks: musicTracks.map((entry) => ({
+      ...withIsoDates(entry),
+      status: String(entry.status)
+    })),
+    musicPlaylists: musicPlaylists.map(withIsoDates),
+    musicPlaylistTracks: musicPlaylistTracks.map(withIsoDates),
+    musicChannels: musicChannels.map(withIsoDates),
+    musicChannelLocations: musicChannelLocations.map((entry) => ({
+      ...entry,
+      createdAt: toIso(entry.createdAt)
     })),
     playlists: playlists.map((entry) => ({
       ...withIsoDates(entry),
@@ -212,6 +243,11 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await tx.deviceLog.deleteMany();
     await tx.deviceCommand.deleteMany();
     await tx.playbackEvent.deleteMany();
+    await tx.musicChannelLocation.deleteMany();
+    await tx.musicChannel.deleteMany();
+    await tx.musicPlaylistTrack.deleteMany();
+    await tx.musicPlaylist.deleteMany();
+    await tx.musicTrack.deleteMany();
     await tx.userLocationAccess.deleteMany();
     await tx.playlistItemLocation.deleteMany();
     await tx.channelLocation.deleteMany();
@@ -234,6 +270,11 @@ export async function persistPrismaDatabase(prisma: any, database: DatabaseShape
     await createMany(tx.channel, batches.channels);
     await createMany(tx.channelLocation, batches.channelLocations);
     await createMany(tx.media, batches.media);
+    await createMany(tx.musicTrack, batches.musicTracks);
+    await createMany(tx.musicPlaylist, batches.musicPlaylists);
+    await createMany(tx.musicPlaylistTrack, batches.musicPlaylistTracks);
+    await createMany(tx.musicChannel, batches.musicChannels);
+    await createMany(tx.musicChannelLocation, batches.musicChannelLocations);
     await createMany(tx.playlist, batches.playlists);
     await createMany(tx.playlistItem, batches.playlistItems);
     await createMany(tx.playlistItemLocation, batches.playlistItemLocations);
@@ -348,6 +389,74 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       updatedAt: toDate(entry.updatedAt)
     }));
   const mediaIds = new Set(media.map((entry) => entry.id));
+
+  const musicTracks = ((database as any).musicTracks || [])
+    .map((entry) => ({
+      id: entry.id,
+      title: entry.title || "Utwór",
+      artist: entry.artist || "",
+      album: entry.album || "",
+      fileName: entry.fileName,
+      originalName: entry.originalName || entry.fileName,
+      mimeType: entry.mimeType || "audio/mpeg",
+      durationSeconds: Number(entry.durationSeconds || 180) || 180,
+      status: entry.status === "draft" ? "draft" : "published",
+      tags: entry.tags || "",
+      licenseNotes: entry.licenseNotes || "",
+      checksum: entry.checksum || "",
+      contentVersion: Number(entry.contentVersion || 1) || 1,
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }))
+    .filter((entry) => Boolean(entry.id && entry.fileName));
+  const musicTrackIds = new Set(musicTracks.map((entry) => entry.id));
+
+  const musicPlaylists = ((database as any).musicPlaylists || [])
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.name || "Playlista muzyczna",
+      description: entry.description || "",
+      isActive: entry.isActive !== false,
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }))
+    .filter((entry) => Boolean(entry.id));
+  const musicPlaylistIds = new Set(musicPlaylists.map((entry) => entry.id));
+
+  const musicPlaylistTracks = ((database as any).musicPlaylistTracks || [])
+    .filter((entry) => musicPlaylistIds.has(entry.playlistId) && musicTrackIds.has(entry.trackId))
+    .map((entry) => ({
+      id: entry.id,
+      playlistId: entry.playlistId,
+      trackId: entry.trackId,
+      sortOrder: Number(entry.sortOrder || 10) || 10,
+      volumePercent: Number(entry.volumePercent || 100) || 100,
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
+
+  const musicChannels = ((database as any).musicChannels || [])
+    .filter((entry) => clientIds.has(entry.clientId) && musicPlaylistIds.has(entry.playlistId))
+    .map((entry) => ({
+      id: entry.id,
+      clientId: entry.clientId,
+      playlistId: entry.playlistId,
+      name: entry.name || "Kanał muzyczny",
+      isActive: entry.isActive !== false,
+      notes: entry.notes || "",
+      createdAt: toDate(entry.createdAt),
+      updatedAt: toDate(entry.updatedAt)
+    }));
+  const musicChannelIds = new Set(musicChannels.map((entry) => entry.id));
+
+  const musicChannelLocations = ((database as any).musicChannelLocations || [])
+    .filter((entry) => musicChannelIds.has(entry.musicChannelId) && locationIds.has(entry.locationId))
+    .map((entry) => ({
+      id: entry.id,
+      musicChannelId: entry.musicChannelId,
+      locationId: entry.locationId,
+      createdAt: toDate(entry.createdAt)
+    }));
 
   const playlists = database.playlists
     .filter((entry) => clientIds.has(entry.clientId))
@@ -522,6 +631,11 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
     channels,
     channelLocations,
     media,
+    musicTracks,
+    musicPlaylists,
+    musicPlaylistTracks,
+    musicChannels,
+    musicChannelLocations,
     playlists,
     playlistItems,
     playlistItemLocations,

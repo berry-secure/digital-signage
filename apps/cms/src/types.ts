@@ -96,6 +96,68 @@ export interface MediaRecord {
   updatedAt: string;
 }
 
+export interface MusicTrackRecord {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  fileName: string;
+  originalName: string;
+  mimeType: string;
+  durationSeconds: number;
+  status: "draft" | "published";
+  tags: string;
+  licenseNotes: string;
+  checksum: string;
+  contentVersion: number;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MusicPlaylistTrackRecord {
+  id: string;
+  playlistId: string;
+  trackId: string;
+  sortOrder: number;
+  volumePercent: number;
+  createdAt: string;
+  updatedAt: string;
+  trackTitle: string;
+  artist: string;
+  album: string;
+  durationSeconds: number;
+  status: "draft" | "published" | "";
+  url: string;
+  checksum: string;
+  contentVersion: number;
+}
+
+export interface MusicPlaylistRecord {
+  id: string;
+  name: string;
+  description: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  items: MusicPlaylistTrackRecord[];
+}
+
+export interface MusicChannelRecord {
+  id: string;
+  clientId: string;
+  playlistId: string;
+  name: string;
+  isActive: boolean;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+  clientName: string;
+  playlistName: string;
+  locationIds: string[];
+  locationNames: string[];
+}
+
 export interface PlaylistItemRecord {
   id: string;
   playlistId: string;
@@ -280,6 +342,9 @@ export interface BootstrapPayload {
   locations: LocationRecord[];
   channels: ChannelRecord[];
   media: MediaRecord[];
+  musicTracks: MusicTrackRecord[];
+  musicPlaylists: MusicPlaylistRecord[];
+  musicChannels: MusicChannelRecord[];
   playlists: PlaylistRecord[];
   schedules: ScheduleRecord[];
   devices: DeviceRecord[];
