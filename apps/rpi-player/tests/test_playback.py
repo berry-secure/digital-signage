@@ -29,6 +29,11 @@ class PlaybackTest(unittest.TestCase):
         self.assertIn("--force-window=immediate", command)
         self.assertEqual(command[-2:], ["/cache/clip-a.mp4", "/cache/clip-b.mp4"])
 
+    def test_mpv_playlist_command_can_disable_audio(self):
+        command = build_mpv_playlist_command(["/cache/clip-a.mp4"], "HDMI-A-1", 80, 10, audio_enabled=False)
+
+        self.assertIn("--no-audio", command)
+
     def test_mpv_command_sets_image_duration(self):
         command = build_mpv_command("/cache/menu.png", "HDMI-A-2", "image", 12, 0)
 

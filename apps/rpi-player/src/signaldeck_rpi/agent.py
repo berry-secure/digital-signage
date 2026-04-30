@@ -187,6 +187,7 @@ class AgentRuntime:
                 output,
                 ready_items[0].get("volumePercent") or 100,
                 _first_image_duration(ready_items),
+                audio_enabled=_queue_has_audio(ready_items),
             )
             if allow_download:
                 self.cache.write_manifest(output, playable_items)
@@ -229,7 +230,7 @@ class AgentRuntime:
         if state.current_item_id == queue_id and self.playback_controller.is_running(output):
             return
 
-        command = build_mpv_playlist_command(paths, output, 100, _first_image_duration(queue))
+        command = build_mpv_playlist_command(paths, output, 100, _first_image_duration(queue), audio_enabled=False)
         self.playback_controller.play(output, command)
         self._start_proof(output, serial, secret, state.device_id, queue)
         state.current_item_id = queue_id
@@ -390,6 +391,16 @@ def _first_image_duration(queue: list[dict[str, Any]]) -> int | float:
     return 10
 
 
+def _queue_has_audio(queue: list[dict[str, Any]]) -> bool:
+    return any(_truthy(item.get("hasAudio", item.get("has_audio", False))) for item in queue)
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _cached_file_item(path: Path, index: int) -> dict[str, Any]:
     kind = "image" if path.suffix.lower() in IMAGE_SUFFIXES else "video"
     return {
@@ -398,6 +409,7 @@ def _cached_file_item(path: Path, index: int) -> dict[str, Any]:
         "kind": kind,
         "durationSeconds": 10,
         "volumePercent": 100,
+        "hasAudio": False,
         "sourceType": "cache",
         "contentVersion": 0,
         "url": str(path),

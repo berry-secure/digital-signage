@@ -150,6 +150,13 @@ class ServerUrlCommandCmsClient(FakeCmsClient):
         return response
 
 
+class AudioCmsClient(FakeCmsClient):
+    def post_session(self, payload):
+        response = super().post_session(payload)
+        response["playback"]["queue"][0]["hasAudio"] = True
+        return response
+
+
 class FakeMediaCache(MediaCache):
     def __init__(self, root):
         super().__init__(root, 64)
@@ -214,6 +221,7 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertIn("--drm-connector=HDMI-A-1", playback.played[0][1])
             self.assertIn("--drm-connector=HDMI-A-2", playback.played[1][1])
             self.assertIn("--loop-playlist=inf", playback.played[0][1])
+            self.assertIn("--no-audio", playback.played[0][1])
             self.assertEqual(len([arg for arg in playback.played[0][1] if arg.endswith(".mp4")]), 2)
             self.assertEqual(
                 proof.started,
@@ -222,6 +230,16 @@ class AgentRuntimeTest(unittest.TestCase):
                     ("HDMI-A-2", "MK5ABC123B", "device-2", ["item:0", "item:1"]),
                 ],
             )
+
+    def test_poll_once_keeps_audio_enabled_when_manifest_declares_audio(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            playback = FakePlaybackController()
+            runtime = self._runtime(root, AudioCmsClient(), FakeMediaCache(root), playback)
+
+            runtime.poll_once()
+
+            self.assertNotIn("--no-audio", playback.played[0][1])
 
     def test_poll_once_starts_playback_before_flushing_backlog(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -325,6 +343,7 @@ class AgentRuntimeTest(unittest.TestCase):
 
             self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1"])
             self.assertIn(str(media_path), playback.played[0][1])
+            self.assertIn("--no-audio", playback.played[0][1])
             self.assertEqual(proof.started, [("HDMI-A-1", "MK5ABC123A", "", ["cached-file:orphaned.mp4"])])
 
     def test_start_cached_playback_plays_manifest_without_polling_cms(self):

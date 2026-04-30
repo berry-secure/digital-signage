@@ -62,6 +62,7 @@ def build_mpv_playlist_command(
     connector: str,
     volume_percent: int | float,
     image_duration_seconds: int | float = 10,
+    audio_enabled: bool = True,
 ) -> list[str]:
     command = [
         "mpv",
@@ -76,6 +77,8 @@ def build_mpv_playlist_command(
         f"--volume={_clamp_int(volume_percent, 0, 100)}",
         f"--image-display-duration={max(int(image_duration_seconds or 10), 1)}",
     ]
+    if not audio_enabled:
+        command.append("--no-audio")
     command.extend(str(path) for path in media_paths)
     return command
 
