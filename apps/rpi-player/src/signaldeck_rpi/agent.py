@@ -71,6 +71,7 @@ class AgentRuntime:
 
     def poll_once(self) -> list[dict[str, Any]]:
         responses: list[dict[str, Any]] = []
+        connected = False
         for output, payload in zip(self.enabled_output_names(), self.build_session_payloads()):
             output_identity = self.identity.outputs[output]
             try:
@@ -80,8 +81,8 @@ class AgentRuntime:
                 self._sync_cached_playback(output, output_identity.serial, output_identity.secret)
                 continue
 
+            connected = True
             responses.append(response)
-            self._flush_pending()
             self._update_state(output, response)
             queue = _queue_from_response(response)
             self._sync_playback(output, output_identity.serial, output_identity.secret, queue)
@@ -110,6 +111,8 @@ class AgentRuntime:
                     message = f"failed to apply command {command_id}: {error}"
                     LOGGER.warning(message)
                     self._log(output_identity.serial, output_identity.secret, "warn", "command", message, {"command": command})
+        if connected:
+            self._flush_pending(max_items=20)
         return responses
 
     def enabled_output_names(self) -> list[str]:
@@ -258,11 +261,11 @@ class AgentRuntime:
     def _run(self, command: list[str], allow_failure: bool = False) -> object:
         return (self.runner or _run)(command, allow_failure)
 
-    def _flush_pending(self) -> None:
+    def _flush_pending(self, max_items: int | None = None) -> None:
         if self.proof_reporter:
-            self.proof_reporter.flush_pending()
+            self.proof_reporter.flush_pending(max_items=max_items)
         if self.log_spool:
-            self.log_spool.flush(self.cms.post_log_payload)
+            self.log_spool.flush(self.cms.post_log_payload, max_items=max_items)
 
 
 def create_runtime(

@@ -103,9 +103,12 @@ class ProofOfPlaySpool:
         os.replace(partial, path)
         return path
 
-    def flush(self, sender: Callable[[dict[str, Any]], Any]) -> int:
+    def flush(self, sender: Callable[[dict[str, Any]], Any], max_items: int | None = None) -> int:
         sent = 0
-        for path in self._pending_files():
+        pending_files = self._pending_files()
+        if max_items is not None:
+            pending_files = pending_files[: max(max_items, 0)]
+        for path in pending_files:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 sender(payload)
@@ -200,8 +203,8 @@ class ProofOfPlayReporter:
         )
         self._send_or_spool(payload)
 
-    def flush_pending(self) -> int:
-        return self.spool.flush(self.cms.post_proof_of_play)
+    def flush_pending(self, max_items: int | None = None) -> int:
+        return self.spool.flush(self.cms.post_proof_of_play, max_items=max_items)
 
     def pending_count(self) -> int:
         return self.spool.pending_count()

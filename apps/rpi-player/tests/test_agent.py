@@ -67,8 +67,18 @@ class FakeProofReporter:
     def stop_output(self, output):
         self.stopped.append(output)
 
-    def flush_pending(self):
+    def flush_pending(self, max_items=None):
         self.flushed += 1
+        return 0
+
+
+class OrderedProofReporter(FakeProofReporter):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    def flush_pending(self, max_items=None):
+        self.events.append(("proof_flush", max_items))
         return 0
 
 
@@ -88,6 +98,25 @@ class FakePlaybackController:
 
     def is_running(self, output):
         return output in self.running
+
+
+class OrderedPlaybackController(FakePlaybackController):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    def play(self, output, command):
+        self.events.append(("play", output))
+        super().play(output, command)
+
+
+class OrderedLogSpool:
+    def __init__(self, events):
+        self.events = events
+
+    def flush(self, sender, max_items=None):
+        self.events.append(("log_flush", max_items))
+        return 0
 
 
 class FailingAckCmsClient(FakeCmsClient):
@@ -185,6 +214,21 @@ class AgentRuntimeTest(unittest.TestCase):
                     ("HDMI-A-2", "MK5ABC123B", "device-2", ["item:0", "item:1"]),
                 ],
             )
+
+    def test_poll_once_starts_playback_before_flushing_backlog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events = []
+            cache = FakeMediaCache(root)
+            playback = OrderedPlaybackController(events)
+            proof = OrderedProofReporter(events)
+            log_spool = OrderedLogSpool(events)
+            runtime = self._runtime(root, FakeCmsClient(), cache, playback, proof, log_spool=log_spool)
+
+            runtime.poll_once()
+
+            self.assertEqual(events[:2], [("play", "HDMI-A-1"), ("play", "HDMI-A-2")])
+            self.assertEqual(events[2:], [("proof_flush", 20), ("log_flush", 20)])
 
     def test_poll_once_does_not_restart_same_running_item(self):
         with tempfile.TemporaryDirectory() as directory:
