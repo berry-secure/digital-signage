@@ -15,7 +15,7 @@ class CmsClient:
         return self._post("/api/player/session", payload)
 
     def post_proof_of_play(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._post("/api/proof-of-play", payload)
+        return self._post("/api/player/proof-of-play", payload)
 
     def ack_command(self, command_id: str, serial: str, secret: str, status: str, message: str) -> dict[str, Any]:
         return self._post(
@@ -45,6 +45,9 @@ class CmsClient:
             "networkStatus": str(extra.pop("network_status", extra.pop("networkStatus", ""))),
         }
         payload.update(extra)
+        return self.post_log_payload(payload)
+
+    def post_log_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/player/logs", payload)
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:

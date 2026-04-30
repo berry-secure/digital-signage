@@ -31,10 +31,13 @@ def build_proof_payload(
     item_id = str(item.get("id") or "")
     media_id = str(item.get("mediaId") or item.get("media_id") or "")
     playlist_id = str(item.get("playlistId") or item.get("playlist_id") or "")
+    schedule_id = str(item.get("scheduleId") or item.get("schedule_id") or "")
     event_id = str(item.get("eventId") or item.get("event_id") or "")
     title = str(item.get("title") or "")
     kind = str(item.get("kind") or "unknown")
     source_type = str(item.get("sourceType") or item.get("source_type") or "playlist")
+    checksum = str(item.get("checksum") or "")
+    content_version = item.get("contentVersion", item.get("content_version", 0))
     duration = _positive_float(item.get("durationSeconds"), 0)
     volume = _clamp_int(item.get("volumePercent"), 0, 100)
     local_id = uuid.uuid4().hex
@@ -45,31 +48,42 @@ def build_proof_payload(
         "deviceId": device_id,
         "deviceSecret": secret,
         "output": output,
+        "status": event_type,
         "eventType": event_type,
         "occurredAt": occurred,
+        "startedAt": started,
         "playbackStartedAt": started,
         "queueIndex": queue_index,
         "loopIndex": loop_index,
         "itemId": item_id,
+        "playbackItemId": item_id,
         "mediaId": media_id,
         "playlistId": playlist_id,
+        "scheduleId": schedule_id,
         "eventId": event_id,
         "title": title,
+        "mediaTitle": title,
         "kind": kind,
+        "mediaKind": kind,
         "sourceType": source_type,
         "durationSeconds": duration,
         "volumePercent": volume,
+        "checksum": checksum,
+        "contentVersion": content_version,
         "appVersion": app_version,
         "item": {
             "id": item_id,
             "mediaId": media_id,
             "playlistId": playlist_id,
+            "scheduleId": schedule_id,
             "eventId": event_id,
             "title": title,
             "kind": kind,
             "sourceType": source_type,
             "durationSeconds": duration,
             "volumePercent": volume,
+            "checksum": checksum,
+            "contentVersion": content_version,
         },
     }
 

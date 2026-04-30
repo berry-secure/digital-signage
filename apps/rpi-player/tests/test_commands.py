@@ -19,15 +19,15 @@ class CommandsTest(unittest.TestCase):
         self.assertEqual(action.effect, "set_volume")
 
     def test_route_set_server_url_requires_https_url(self):
-        action = route_command({"id": "3", "type": "set_server_url", "payload": {"serverUrl": "https://maask-ds.online/"}})
+        action = route_command({"id": "3", "type": "set_server_url", "payload": {"serverUrl": "https://maasck-ds.online/"}})
 
         self.assertEqual(action.scope, "global")
         self.assertEqual(action.ack_status, "acked")
         self.assertEqual(action.effect, "set_server_url")
-        self.assertEqual(server_url_from_command({"payload": {"serverUrl": "https://maask-ds.online/"}}), "https://maask-ds.online")
+        self.assertEqual(server_url_from_command({"payload": {"serverUrl": "https://maasck-ds.online/"}}), "https://maasck-ds.online")
 
     def test_route_set_server_url_rejects_invalid_url(self):
-        action = route_command({"id": "3", "type": "set_server_url", "payload": {"serverUrl": "http://maask-ds.online"}})
+        action = route_command({"id": "3", "type": "set_server_url", "payload": {"serverUrl": "http://maasck-ds.online"}})
 
         self.assertEqual(action.ack_status, "failed")
         self.assertIn("https", action.message)

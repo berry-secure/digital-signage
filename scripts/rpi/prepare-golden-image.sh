@@ -60,8 +60,8 @@ reset_clone_specific_state() {
     "${BOOT_DIR}/SIGNALDECK_LOCK" \
     "${BOOT_DIR}/SIGNALDECK_HOTSPOT.txt"
 
-  rm -rf "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${STATE_DIR}/proof-of-play"
-  install -d -m 0755 "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${STATE_DIR}/proof-of-play"
+  rm -rf "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${STATE_DIR}/proof-of-play" "${STATE_DIR}/queue"
+  install -d -m 0755 "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${STATE_DIR}/proof-of-play" "${STATE_DIR}/queue/logs"
 
   if command -v nmcli >/dev/null 2>&1; then
     nmcli connection delete SignalDeck-Setup >/dev/null 2>&1 || true

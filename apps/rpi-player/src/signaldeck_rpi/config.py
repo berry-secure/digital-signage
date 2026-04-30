@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import tomllib
+from urllib.parse import urlparse, urlunparse
 
-DEFAULT_SERVER_URL = "https://maask-ds.online"
+DEFAULT_SERVER_URL = "https://maasck-ds.online"
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def load_config(path: str | Path) -> PlayerConfig:
     ]
 
     return PlayerConfig(
-        server_url=str(data.get("server_url") or defaults.server_url).strip().rstrip("/"),
+        server_url=normalize_server_url(str(data.get("server_url") or defaults.server_url)),
         device_model=str(data.get("device_model") or defaults.device_model).strip(),
         player_type=str(data.get("player_type") or defaults.player_type).strip(),
         app_version=str(data.get("app_version") or defaults.app_version).strip(),
@@ -97,7 +98,7 @@ def render_config_toml(
         f'\n[[outputs]]\nname = "{output.name}"\nserial_suffix = "{output.serial_suffix}"\nenabled = {"true" if output.enabled else "false"}\n'
         for output in config.outputs
     )
-    return f'''server_url = "{(server_url or config.server_url).strip().rstrip("/")}"
+    return f'''server_url = "{normalize_server_url(server_url or config.server_url)}"
 device_model = "{config.device_model}"
 player_type = "{config.player_type}"
 app_version = "{config.app_version}"
@@ -125,6 +126,18 @@ def write_default_config(path: str | Path) -> bool:
 
 def _table(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def normalize_server_url(value: str) -> str:
+    url = str(value or DEFAULT_SERVER_URL).strip().rstrip("/")
+    if url.startswith("http://"):
+        url = "https://" + url.removeprefix("http://")
+    elif "://" not in url:
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        parsed = parsed._replace(scheme="https")
+    return urlunparse(parsed).rstrip("/")
 
 
 def _int(value: Any, fallback: int) -> int:

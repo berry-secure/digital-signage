@@ -10,7 +10,7 @@ LOG_DIR="${SIGNALDECK_LOG_DIR:-/var/log/signaldeck}"
 BACKUP_DIR="${STATE_DIR}/backups"
 REPO_URL="${SIGNALDECK_REPO_URL:-https://github.com/berry-secure/digital-signage.git}"
 REPO_REF="${SIGNALDECK_REF:-main}"
-SERVER_URL="${SIGNALDECK_SERVER_URL:-https://maask-ds.online}"
+SERVER_URL="${SIGNALDECK_SERVER_URL:-https://maasck-ds.online}"
 BOOT_DIR="${SIGNALDECK_BOOT_DIR:-/boot/firmware}"
 HOTSPOT_CONNECTION="SignalDeck-Setup"
 

@@ -14,6 +14,7 @@ from .cms import CmsClient
 from .commands import CommandAction, route_command, server_url_from_command
 from .config import PlayerConfig, load_config, render_config_toml
 from .identity import PlayerIdentity, load_or_create_system_identity
+from .logs import LogSpool
 from .playback import MvpProcessController, build_mpv_playlist_command, playback_decision, probe_drm_connector_states
 from .proof import ProofOfPlayReporter
 
@@ -39,6 +40,7 @@ class AgentRuntime:
     cache: MediaCache
     playback_controller: Any = field(default_factory=MvpProcessController)
     proof_reporter: Any | None = None
+    log_spool: Any | None = None
     config_path: Path = Path("/etc/signaldeck/player.toml")
     runner: Callable[[list[str], bool], object] | None = None
     states: dict[str, OutputState] = field(default_factory=dict)
@@ -56,7 +58,7 @@ class AgentRuntime:
                 {
                     "serial": output_identity.serial,
                     "secret": output_identity.secret,
-                    "platform": "raspberrypi",
+                    "platform": "rpi",
                     "appVersion": self.config.app_version,
                     "deviceModel": self.config.device_model,
                     "playerType": self.config.player_type,
@@ -75,13 +77,13 @@ class AgentRuntime:
                 response = self.cms.post_session(payload)
             except Exception as error:
                 LOGGER.warning("session poll failed for %s: %s", output, error)
+                self._sync_cached_playback(output, output_identity.serial, output_identity.secret)
                 continue
 
             responses.append(response)
+            self._flush_pending()
             self._update_state(output, response)
             queue = _queue_from_response(response)
-            if queue:
-                self.cache.write_manifest(output, queue)
             self._sync_playback(output, output_identity.serial, output_identity.secret, queue)
 
             for command in response.get("commands") or []:
@@ -117,6 +119,11 @@ class AgentRuntime:
             if output.enabled and output.name in self.identity.outputs
         ]
 
+    def start_cached_playback(self) -> None:
+        for output in self.enabled_output_names():
+            output_identity = self.identity.outputs[output]
+            self._sync_cached_playback(output, output_identity.serial, output_identity.secret)
+
     def _update_state(self, output: str, response: dict[str, Any]) -> None:
         state = self.states.setdefault(output, OutputState())
         device = response.get("device") if isinstance(response.get("device"), dict) else {}
@@ -128,7 +135,7 @@ class AgentRuntime:
         state.active_item_title = str(queue[0].get("title") or "") if queue else ""
         state.last_message = str(response.get("playback", {}).get("reason") or "")
 
-    def _sync_playback(self, output: str, serial: str, secret: str, queue: list[dict[str, Any]]) -> None:
+    def _sync_playback(self, output: str, serial: str, secret: str, queue: list[dict[str, Any]], allow_download: bool = True) -> None:
         state = self.states.setdefault(output, OutputState())
         if not self._is_output_connected(output):
             self.playback_controller.stop(output)
@@ -145,45 +152,75 @@ class AgentRuntime:
 
         playable_items = _playable_items(queue)
         if not playable_items:
-            self.playback_controller.stop(output)
-            self._stop_proof(output)
-            state.current_item_id = ""
-            return
-
-        queue_id = _queue_signature(playable_items)
-        if state.current_item_id == queue_id and self.playback_controller.is_running(output):
+            if allow_download:
+                self.playback_controller.stop(output)
+                self._stop_proof(output)
+                state.current_item_id = ""
             return
 
         try:
-            media_paths = [self.cache.download(output, item) for item in playable_items]
+            media_entries = self._prepare_media(output, playable_items, allow_download)
+            ready_items = [item for item, _path in media_entries]
+            if not ready_items:
+                if allow_download:
+                    raise RuntimeError(f"no playable cached media for {output}")
+                return
+
+            queue_id = _queue_signature(ready_items)
+            if state.current_item_id == queue_id and self.playback_controller.is_running(output):
+                return
+
             command = build_mpv_playlist_command(
-                media_paths,
+                [path for _item, path in media_entries],
                 output,
-                playable_items[0].get("volumePercent") or 100,
-                _first_image_duration(playable_items),
+                ready_items[0].get("volumePercent") or 100,
+                _first_image_duration(ready_items),
             )
+            if allow_download:
+                self.cache.write_manifest(output, playable_items)
             self.playback_controller.play(output, command)
-            self._start_proof(output, serial, secret, state.device_id, playable_items)
+            self._start_proof(output, serial, secret, state.device_id, ready_items)
             state.current_item_id = queue_id
-            LOGGER.info("started playback on %s with %s queued item(s)", output, len(playable_items))
+            LOGGER.info("started playback on %s with %s queued item(s)", output, len(ready_items))
         except Exception as error:
             LOGGER.error("failed to start playback on %s: %s", output, error)
             self._log(serial, secret, "error", "playback", f"failed to start playback on {output}: {error}", {"output": output, "queue": playable_items})
 
+    def _sync_cached_playback(self, output: str, serial: str, secret: str) -> None:
+        queue = self.cache.read_manifest(output)
+        if not queue:
+            return
+        self.states.setdefault(output, OutputState()).last_message = "Offline, playing cached playlist"
+        self._sync_playback(output, serial, secret, queue, allow_download=False)
+
+    def _prepare_media(self, output: str, items: list[dict[str, Any]], allow_download: bool) -> list[tuple[dict[str, Any], Path]]:
+        media_entries: list[tuple[dict[str, Any], Path]] = []
+        for item in items:
+            if allow_download:
+                media_entries.append((item, self.cache.download(output, item)))
+                continue
+            path = self.cache.cached_path(output, item)
+            if path is not None:
+                media_entries.append((item, path))
+        return media_entries
+
     def _log(self, serial: str, secret: str, severity: str, component: str, message: str, context: dict[str, Any]) -> None:
+        payload = _build_log_payload(
+            serial,
+            secret,
+            severity,
+            component,
+            message,
+            context,
+            self.config.app_version,
+            "online",
+        )
         try:
-            self.cms.post_log(
-                serial,
-                secret,
-                severity,
-                component,
-                message,
-                context=context,
-                app_version=self.config.app_version,
-                network_status="online",
-            )
+            self.cms.post_log_payload(payload)
         except Exception:
             LOGGER.debug("failed to post CMS log", exc_info=True)
+            if self.log_spool:
+                self.log_spool.enqueue(payload)
 
     def _is_output_connected(self, output: str) -> bool:
         if self.connector_status is not None:
@@ -221,6 +258,12 @@ class AgentRuntime:
     def _run(self, command: list[str], allow_failure: bool = False) -> object:
         return (self.runner or _run)(command, allow_failure)
 
+    def _flush_pending(self) -> None:
+        if self.proof_reporter:
+            self.proof_reporter.flush_pending()
+        if self.log_spool:
+            self.log_spool.flush(self.cms.post_log_payload)
+
 
 def create_runtime(
     config_path: str | Path = "/etc/signaldeck/player.toml",
@@ -228,15 +271,18 @@ def create_runtime(
     state_root: str | Path = "/var/lib/signaldeck",
 ) -> AgentRuntime:
     config = load_config(config_path)
+    LOGGER.info("starting Signal Deck RPi player server_url=%s", config.server_url)
     identity = load_or_create_system_identity(identity_path, config.outputs)
     cms = CmsClient(config.server_url)
     cache = MediaCache(state_root, config.cache_limit_mb)
     proof_reporter = ProofOfPlayReporter(cms, Path(state_root) / "proof-of-play", config.app_version)
-    return AgentRuntime(config, identity, cms, cache, proof_reporter=proof_reporter, config_path=Path(config_path))
+    log_spool = LogSpool(Path(state_root) / "queue" / "logs")
+    return AgentRuntime(config, identity, cms, cache, proof_reporter=proof_reporter, log_spool=log_spool, config_path=Path(config_path))
 
 
 def run_forever(runtime: AgentRuntime) -> None:
     notify_systemd("READY=1")
+    runtime.start_cached_playback()
     while True:
         runtime.poll_once()
         notify_systemd("WATCHDOG=1")
@@ -276,6 +322,30 @@ def _first_image_duration(queue: list[dict[str, Any]]) -> int | float:
         if str(item.get("kind") or "").lower() == "image":
             return item.get("durationSeconds") or 10
     return 10
+
+
+def _build_log_payload(
+    serial: str,
+    secret: str,
+    severity: str,
+    component: str,
+    message: str,
+    context: dict[str, Any],
+    app_version: str,
+    network_status: str,
+) -> dict[str, Any]:
+    return {
+        "serial": serial,
+        "secret": secret,
+        "severity": severity,
+        "component": component,
+        "message": message,
+        "stack": "",
+        "context": context,
+        "appVersion": app_version,
+        "osVersion": "",
+        "networkStatus": network_status,
+    }
 
 
 def _run(command: list[str], allow_failure: bool = False) -> subprocess.CompletedProcess:

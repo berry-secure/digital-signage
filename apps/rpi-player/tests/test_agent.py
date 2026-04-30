@@ -8,6 +8,7 @@ from signaldeck_rpi.cache import MediaCache
 from signaldeck_rpi.cms import CmsClient
 from signaldeck_rpi.config import OutputConfig, default_config, load_config
 from signaldeck_rpi.identity import load_or_create_identity
+from signaldeck_rpi.logs import LogSpool
 
 
 class FakeCmsClient(CmsClient):
@@ -40,6 +41,18 @@ class FakeCmsClient(CmsClient):
     def post_log(self, serial, secret, severity, component, message, **extra):
         self.logs.append((serial, severity, component, message, extra))
         return {"deviceLog": {"message": message}}
+
+    def post_log_payload(self, payload):
+        self.logs.append(
+            (
+                payload["serial"],
+                payload["severity"],
+                payload["component"],
+                payload["message"],
+                {"context": payload.get("context", {})},
+            )
+        )
+        return {"deviceLog": {"message": payload["message"]}}
 
 
 class FakeProofReporter:
@@ -82,11 +95,22 @@ class FailingAckCmsClient(FakeCmsClient):
         raise RuntimeError("database timeout")
 
 
+class FailingLogCmsClient(FakeCmsClient):
+    def post_log_payload(self, payload):
+        raise RuntimeError("cms offline")
+
+
+class OfflineCmsClient(FakeCmsClient):
+    def post_session(self, payload):
+        self.sessions.append(payload)
+        raise RuntimeError("network offline")
+
+
 class ServerUrlCommandCmsClient(FakeCmsClient):
     def post_session(self, payload):
         response = super().post_session(payload)
         response["commands"] = [
-            {"id": "server-url-command", "type": "set_server_url", "payload": {"serverUrl": "https://maask-ds.online/"}}
+            {"id": "server-url-command", "type": "set_server_url", "payload": {"serverUrl": "https://maasck-ds.online/"}}
         ]
         return response
 
@@ -103,6 +127,13 @@ class FakeMediaCache(MediaCache):
         return path
 
 
+class FailingMediaCache(FakeMediaCache):
+    def download(self, output, item, timeout_seconds=30):
+        if item["id"] == "item:1":
+            raise RuntimeError("download failed")
+        return super().download(output, item, timeout_seconds)
+
+
 class AgentRuntimeTest(unittest.TestCase):
     def test_agent_builds_one_session_payload_per_enabled_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,7 +142,7 @@ class AgentRuntimeTest(unittest.TestCase):
             payloads = runtime.build_session_payloads("idle", "")
 
         self.assertEqual([payload["serial"] for payload in payloads], ["MK5ABC123A", "MK5ABC123B"])
-        self.assertTrue(all(payload["platform"] == "raspberrypi" for payload in payloads))
+        self.assertTrue(all(payload["platform"] == "rpi" for payload in payloads))
         self.assertTrue(all(payload["playerType"] == "video_premium" for payload in payloads))
         self.assertEqual(payloads[0]["playerMessage"], "HDMI-A-1 idle")
 
@@ -185,6 +216,54 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertEqual(playback.stopped, ["HDMI-A-2"])
             self.assertEqual(proof.stopped, ["HDMI-A-2"])
 
+    def test_poll_once_plays_cached_manifest_when_session_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = FakeMediaCache(root)
+            cached_queue = [{"id": "cached:0", "kind": "video", "url": "https://cms.example.test/uploads/cached.mp4", "durationSeconds": 10}]
+            cache.write_manifest("HDMI-A-1", cached_queue)
+            cache.store_bytes("HDMI-A-1", cached_queue[0], b"cached-media")
+            playback = FakePlaybackController()
+            proof = FakeProofReporter()
+            runtime = self._runtime(root, OfflineCmsClient(), cache, playback, proof)
+            runtime.connector_status = {"HDMI-A-1": True, "HDMI-A-2": False}
+
+            runtime.poll_once()
+
+            self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1"])
+            self.assertEqual(proof.started, [("HDMI-A-1", "MK5ABC123A", "", ["cached:0"])])
+            self.assertEqual(len([arg for arg in playback.played[0][1] if arg.endswith(".mp4")]), 1)
+            self.assertEqual(cache.downloaded, [])
+
+    def test_start_cached_playback_plays_manifest_without_polling_cms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = FakeMediaCache(root)
+            cached_queue = [{"id": "cached:0", "kind": "video", "url": "https://cms.example.test/uploads/cached.mp4", "durationSeconds": 10}]
+            cache.write_manifest("HDMI-A-1", cached_queue)
+            cache.store_bytes("HDMI-A-1", cached_queue[0], b"cached-media")
+            cms = FakeCmsClient()
+            playback = FakePlaybackController()
+            runtime = self._runtime(root, cms, cache, playback)
+            runtime.connector_status = {"HDMI-A-1": True, "HDMI-A-2": False}
+
+            runtime.start_cached_playback()
+
+            self.assertEqual(cms.sessions, [])
+            self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1"])
+
+    def test_poll_once_keeps_previous_manifest_when_new_download_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = FailingMediaCache(root)
+            playback = FakePlaybackController()
+            runtime = self._runtime(root, FakeCmsClient(), cache, playback)
+
+            runtime.poll_once()
+
+            self.assertEqual(cache.read_manifest("HDMI-A-1"), [])
+            self.assertEqual(playback.played, [])
+
     def test_poll_once_starts_output_after_hotplug(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -213,35 +292,59 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertTrue(any(log[2] == "command" and "failed to ack" in log[3] for log in cms.logs))
             self.assertTrue(any("failed to ack command" in line for line in logs.output))
 
+    def test_log_spool_keeps_logs_when_cms_is_offline_and_flushes_on_reconnect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spool = LogSpool(root / "queue" / "logs")
+            runtime = self._runtime(root, FailingLogCmsClient(), log_spool=spool)
+
+            runtime._log("MK5ABC123A", "secret", "warn", "network", "offline", {"output": "HDMI-A-1"})
+
+            self.assertEqual(spool.pending_count(), 1)
+
+            cms = FakeCmsClient()
+            runtime.cms = cms
+            runtime._flush_pending()
+
+            self.assertEqual(spool.pending_count(), 0)
+            self.assertEqual(cms.logs[0][2], "network")
+            self.assertEqual(cms.logs[0][3], "offline")
+
     def test_poll_once_applies_server_url_command_after_ack(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "player.toml"
             config_path.write_text(
-                'server_url = "https://cms.berry-secure.pl"\n[[outputs]]\nname = "HDMI-A-1"\nserial_suffix = "A"\nenabled = true\n',
+                'server_url = "https://legacy.example.test"\n[[outputs]]\nname = "HDMI-A-1"\nserial_suffix = "A"\nenabled = true\n',
                 encoding="utf-8",
             )
+            identity_path = root / "identity.json"
             commands = []
             config = replace(load_config(config_path), outputs=[OutputConfig("HDMI-A-1", "A", True)])
+            before_identity = load_or_create_identity(identity_path, "MK5ABC123", config.outputs)
             runtime = self._runtime(
                 root,
                 ServerUrlCommandCmsClient(),
                 config=config,
                 config_path=config_path,
+                identity_path=identity_path,
                 runner=lambda command, allow_failure=False: commands.append((command, allow_failure)),
             )
 
             runtime.poll_once()
 
-            self.assertIn('server_url = "https://maask-ds.online"', config_path.read_text(encoding="utf-8"))
-            self.assertEqual(runtime.config.server_url, "https://maask-ds.online")
+            after_identity = load_or_create_identity(identity_path, "DIFFERENT", config.outputs)
+            self.assertIn('server_url = "https://maasck-ds.online"', config_path.read_text(encoding="utf-8"))
+            self.assertEqual(runtime.config.server_url, "https://maasck-ds.online")
+            self.assertEqual(after_identity.outputs["HDMI-A-1"].serial, before_identity.outputs["HDMI-A-1"].serial)
+            self.assertEqual(after_identity.outputs["HDMI-A-1"].secret, before_identity.outputs["HDMI-A-1"].secret)
             self.assertEqual(runtime.cms.acks[0][0], "server-url-command")
             self.assertEqual(runtime.cms.acks[0][2], "acked")
             self.assertEqual(commands, [(["bash", "-lc", "(sleep 1; systemctl restart signaldeck-agent.service) >/dev/null 2>&1 &"], True)])
 
-    def _runtime(self, root: Path, cms=None, cache=None, playback=None, proof=None, config=None, config_path=None, runner=None):
+    def _runtime(self, root: Path, cms=None, cache=None, playback=None, proof=None, log_spool=None, config=None, config_path=None, identity_path=None, runner=None):
         config = config or default_config()
-        identity = load_or_create_identity(root / "identity.json", "MK5ABC123", config.outputs)
+        identity = load_or_create_identity(identity_path or root / "identity.json", "MK5ABC123", config.outputs)
         return AgentRuntime(
             config,
             identity,
@@ -249,6 +352,7 @@ class AgentRuntimeTest(unittest.TestCase):
             cache or FakeMediaCache(root),
             playback_controller=playback or FakePlaybackController(),
             proof_reporter=proof or FakeProofReporter(),
+            log_spool=log_spool,
             config_path=config_path or root / "player.toml",
             runner=runner or (lambda command, allow_failure=False: None),
         )

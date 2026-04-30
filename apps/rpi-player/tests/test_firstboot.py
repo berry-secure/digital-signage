@@ -16,6 +16,8 @@ class FirstBootTest(unittest.TestCase):
             state_root.mkdir()
             boot_dir.mkdir()
             (state_root / "identity.json").write_text("{}", encoding="utf-8")
+            (state_root / "queue" / "logs").mkdir(parents=True)
+            (state_root / "queue" / "logs" / "old.json").write_text("{}", encoding="utf-8")
             (boot_dir / "SIGNALDECK_LOCK").write_text("configured\n", encoding="utf-8")
             commands = []
 
@@ -42,6 +44,7 @@ class FirstBootTest(unittest.TestCase):
             self.assertIn("Maasck23646", handoff)
             self.assertIn(["nmcli", "connection", "modify", "SignalDeck-Setup", "802-11-wireless.ssid", "SignalDeck-ABC123"], [entry[0] for entry in commands])
             self.assertTrue((state_root / "firstboot.done").exists())
+            self.assertFalse((state_root / "queue" / "logs" / "old.json").exists())
 
     def test_firstboot_is_idempotent_after_done_marker(self):
         with tempfile.TemporaryDirectory() as directory:

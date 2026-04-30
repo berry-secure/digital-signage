@@ -1,14 +1,14 @@
 import textwrap
 import unittest
 
-from signaldeck_rpi.config import OutputConfig, default_config, load_config
+from signaldeck_rpi.config import OutputConfig, default_config, load_config, render_config_toml
 
 
 class ConfigTest(unittest.TestCase):
     def test_default_config_has_dual_hdmi_outputs(self):
         config = default_config()
 
-        self.assertEqual(config.server_url, "https://maask-ds.online")
+        self.assertEqual(config.server_url, "https://maasck-ds.online")
         self.assertEqual([output.name for output in config.outputs], ["HDMI-A-1", "HDMI-A-2"])
         self.assertEqual([output.serial_suffix for output in config.outputs], ["A", "B"])
         self.assertEqual(config.sync.mode, "independent")
@@ -41,6 +41,18 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.sync.policy, "strict")
         self.assertEqual(config.sync.tolerance_ms, 125)
         self.assertEqual(config.outputs, [OutputConfig("HDMI-A-1", "A", True)])
+
+    def test_load_config_normalizes_server_url_to_https_without_trailing_slash(self):
+        path = self._tmp_path('server_url = "http://maasck-ds.online/"')
+
+        config = load_config(path)
+
+        self.assertEqual(config.server_url, "https://maasck-ds.online")
+
+    def test_render_config_toml_normalizes_server_url(self):
+        payload = render_config_toml(default_config(), server_url="http://maasck-ds.online/")
+
+        self.assertIn('server_url = "https://maasck-ds.online"', payload)
 
     def _tmp_path(self, content):
         import tempfile

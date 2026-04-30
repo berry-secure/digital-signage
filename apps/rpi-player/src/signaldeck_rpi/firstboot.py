@@ -88,7 +88,7 @@ class FirstBootProvisioner:
         os.chmod(path, 0o600)
 
     def _clear_runtime_dirs(self) -> None:
-        for dirname in ("cache", "manifests", "proof-of-play"):
+        for dirname in ("cache", "manifests", "proof-of-play", "queue"):
             directory = self.state_root / dirname
             if not directory.exists():
                 continue

@@ -20,7 +20,7 @@ Each cloned Raspberry Pi generates:
 - Random setup hotspot password.
 - Fresh local player identity secrets.
 
-Fresh cloned images use `https://maask-ds.online` as the default CMS/API URL.
+Fresh cloned images use `https://maasck-ds.online` as the default CMS/API URL.
 
 The first boot handoff file is written to the boot partition:
 

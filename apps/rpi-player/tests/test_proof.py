@@ -29,12 +29,15 @@ class ProofOfPlayTest(unittest.TestCase):
                 "id": "playlist-item-1:0",
                 "mediaId": "media-1",
                 "playlistId": "playlist-1",
+                "scheduleId": "schedule-1",
                 "eventId": "event-1",
                 "title": "Promo",
                 "kind": "video",
                 "sourceType": "playlist",
                 "durationSeconds": 10,
                 "volumePercent": 80,
+                "checksum": "abc123",
+                "contentVersion": 7,
             },
             queue_index=1,
             loop_index=2,
@@ -47,11 +50,19 @@ class ProofOfPlayTest(unittest.TestCase):
         self.assertEqual(payload["deviceId"], "device-1")
         self.assertEqual(payload["deviceSecret"], "secret")
         self.assertEqual(payload["output"], "HDMI-A-1")
+        self.assertEqual(payload["status"], "started")
         self.assertEqual(payload["eventType"], "started")
         self.assertEqual(payload["itemId"], "playlist-item-1:0")
+        self.assertEqual(payload["playbackItemId"], "playlist-item-1:0")
         self.assertEqual(payload["mediaId"], "media-1")
         self.assertEqual(payload["playlistId"], "playlist-1")
+        self.assertEqual(payload["scheduleId"], "schedule-1")
         self.assertEqual(payload["eventId"], "event-1")
+        self.assertEqual(payload["mediaTitle"], "Promo")
+        self.assertEqual(payload["mediaKind"], "video")
+        self.assertEqual(payload["startedAt"], "2026-04-26T11:59:50Z")
+        self.assertEqual(payload["checksum"], "abc123")
+        self.assertEqual(payload["contentVersion"], 7)
         self.assertEqual(payload["loopIndex"], 2)
         self.assertEqual(payload["item"]["title"], "Promo")
 
