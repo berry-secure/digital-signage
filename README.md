@@ -4,7 +4,7 @@ Lekki system Digital Signage pod PocketBase i prosty VPS z Coolify.
 
 W repo są dwie gotowe aplikacje:
 
-- `apps/cms` - minimalistyczny panel CMS pod `https://cms.berry-secure.pl`
+- `apps/cms` - panel CMS pod `https://maasck-ds.online`
 - `apps/player` - aplikacja odbiorcza pod Android/Android TV, pakowana do `.apk` przez Capacitor
 
 Do tego dochodzi:
@@ -70,8 +70,8 @@ npm run dev:player
 
 ## Co dalej po setupie
 
-1. Wejdź na `https://cms.berry-secure.pl`
-2. Zaloguj się kontem `owner@berry-secure.pl` albo tym, które podałeś w setupie
+1. Wejdź na `https://maasck-ds.online`
+2. Zaloguj się kontem właściciela ustawionym w envach produkcyjnych
 3. Dodaj klienta, kanał, użytkownika CMS i media
 4. Zbuduj lub opublikuj APK playera
 5. Zainstaluj APK na Android TV i odczytaj kod parowania

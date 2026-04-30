@@ -7,7 +7,7 @@ const appVersion = "1.0.1";
 const apiBaseUrl = (
   import.meta.env.DEV
     ? "http://localhost:3000"
-    : String(import.meta.env.VITE_API_BASE_URL || "https://cms.berry-secure.pl")
+    : String(import.meta.env.VITE_API_BASE_URL || "https://maasck-ds.online")
 ).replace(/\/$/, "");
 
 type AppPhase = "booting" | "waiting" | "idle" | "playing" | "error";

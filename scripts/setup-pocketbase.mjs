@@ -569,7 +569,7 @@ async function main() {
   console.log("");
   console.log("PocketBase schema is ready.");
   console.log(`CMS login: ${args.ownerEmail}`);
-  console.log("Next step: open https://cms.berry-secure.pl and log in.");
+  console.log("Next step: open https://maasck-ds.online and log in.");
 }
 
 async function upsertCollection(collectionMap, name, buildPayload) {

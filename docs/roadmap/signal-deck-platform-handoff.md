@@ -1,7 +1,7 @@
 # Signal Deck Platform Handoff
 
 Repo local path: `/Users/przeczacyklif/Movies/digital-signage`
-Production URL: `https://cms.berry-secure.pl`
+Production URL: `https://maasck-ds.online`
 
 ## Current Status
 
