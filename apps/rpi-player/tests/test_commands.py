@@ -1,6 +1,6 @@
 import unittest
 
-from signaldeck_rpi.commands import route_command
+from signaldeck_rpi.commands import route_command, server_url_from_command
 
 
 class CommandsTest(unittest.TestCase):
@@ -17,6 +17,20 @@ class CommandsTest(unittest.TestCase):
         self.assertEqual(action.scope, "output")
         self.assertEqual(action.ack_status, "acked")
         self.assertEqual(action.effect, "set_volume")
+
+    def test_route_set_server_url_requires_https_url(self):
+        action = route_command({"id": "3", "type": "set_server_url", "payload": {"serverUrl": "https://maask-ds.online/"}})
+
+        self.assertEqual(action.scope, "global")
+        self.assertEqual(action.ack_status, "acked")
+        self.assertEqual(action.effect, "set_server_url")
+        self.assertEqual(server_url_from_command({"payload": {"serverUrl": "https://maask-ds.online/"}}), "https://maask-ds.online")
+
+    def test_route_set_server_url_rejects_invalid_url(self):
+        action = route_command({"id": "3", "type": "set_server_url", "payload": {"serverUrl": "http://maask-ds.online"}})
+
+        self.assertEqual(action.ack_status, "failed")
+        self.assertIn("https", action.message)
 
     def test_unknown_command_fails_clearly(self):
         action = route_command({"id": "3", "type": "rotate_secret", "payload": {}})

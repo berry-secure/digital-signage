@@ -8,7 +8,7 @@ class ConfigTest(unittest.TestCase):
     def test_default_config_has_dual_hdmi_outputs(self):
         config = default_config()
 
-        self.assertEqual(config.server_url, "https://cms.berry-secure.pl")
+        self.assertEqual(config.server_url, "https://maask-ds.online")
         self.assertEqual([output.name for output in config.outputs], ["HDMI-A-1", "HDMI-A-2"])
         self.assertEqual([output.serial_suffix for output in config.outputs], ["A", "B"])
         self.assertEqual(config.sync.mode, "independent")

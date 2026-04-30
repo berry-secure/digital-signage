@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import logging
 import os
 import socket
+import subprocess
 import time
 
 from .cache import MediaCache
 from .cms import CmsClient
-from .commands import route_command
-from .config import PlayerConfig, load_config
+from .commands import CommandAction, route_command, server_url_from_command
+from .config import PlayerConfig, load_config, render_config_toml
 from .identity import PlayerIdentity, load_or_create_system_identity
 from .playback import MvpProcessController, build_mpv_playlist_command, playback_decision, probe_drm_connector_states
 from .proof import ProofOfPlayReporter
@@ -38,6 +39,8 @@ class AgentRuntime:
     cache: MediaCache
     playback_controller: Any = field(default_factory=MvpProcessController)
     proof_reporter: Any | None = None
+    config_path: Path = Path("/etc/signaldeck/player.toml")
+    runner: Callable[[list[str], bool], object] | None = None
     states: dict[str, OutputState] = field(default_factory=dict)
     connector_status: dict[str, bool] | None = None
 
@@ -94,6 +97,15 @@ class AgentRuntime:
                     )
                 except Exception as error:
                     message = f"failed to ack command {command_id}: {error}"
+                    LOGGER.warning(message)
+                    self._log(output_identity.serial, output_identity.secret, "warn", "command", message, {"command": command})
+                    continue
+                if action.ack_status != "acked":
+                    continue
+                try:
+                    self._apply_command(action, command)
+                except Exception as error:
+                    message = f"failed to apply command {command_id}: {error}"
                     LOGGER.warning(message)
                     self._log(output_identity.serial, output_identity.secret, "warn", "command", message, {"command": command})
         return responses
@@ -196,6 +208,19 @@ class AgentRuntime:
         if self.proof_reporter:
             self.proof_reporter.stop_output(output)
 
+    def _apply_command(self, action: CommandAction, command: dict[str, Any]) -> None:
+        if action.effect != "set_server_url":
+            return
+        server_url = server_url_from_command(command)
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(render_config_toml(self.config, server_url=server_url), encoding="utf-8")
+        self.config_path.chmod(0o640)
+        self.config = load_config(self.config_path)
+        self._run(["bash", "-lc", "(sleep 1; systemctl restart signaldeck-agent.service) >/dev/null 2>&1 &"], True)
+
+    def _run(self, command: list[str], allow_failure: bool = False) -> object:
+        return (self.runner or _run)(command, allow_failure)
+
 
 def create_runtime(
     config_path: str | Path = "/etc/signaldeck/player.toml",
@@ -207,7 +232,7 @@ def create_runtime(
     cms = CmsClient(config.server_url)
     cache = MediaCache(state_root, config.cache_limit_mb)
     proof_reporter = ProofOfPlayReporter(cms, Path(state_root) / "proof-of-play", config.app_version)
-    return AgentRuntime(config, identity, cms, cache, proof_reporter=proof_reporter)
+    return AgentRuntime(config, identity, cms, cache, proof_reporter=proof_reporter, config_path=Path(config_path))
 
 
 def run_forever(runtime: AgentRuntime) -> None:
@@ -251,3 +276,11 @@ def _first_image_duration(queue: list[dict[str, Any]]) -> int | float:
         if str(item.get("kind") or "").lower() == "image":
             return item.get("durationSeconds") or 10
     return 10
+
+
+def _run(command: list[str], allow_failure: bool = False) -> subprocess.CompletedProcess:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 and not allow_failure:
+        detail = (result.stderr or result.stdout or "command failed").strip()
+        raise RuntimeError(f"{' '.join(command)}: {detail}")
+    return result

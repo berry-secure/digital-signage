@@ -10,6 +10,7 @@ LOG_DIR="${SIGNALDECK_LOG_DIR:-/var/log/signaldeck}"
 BACKUP_DIR="${STATE_DIR}/backups"
 REPO_URL="${SIGNALDECK_REPO_URL:-https://github.com/berry-secure/digital-signage.git}"
 REPO_REF="${SIGNALDECK_REF:-main}"
+SERVER_URL="${SIGNALDECK_SERVER_URL:-https://maask-ds.online}"
 BOOT_DIR="${SIGNALDECK_BOOT_DIR:-/boot/firmware}"
 HOTSPOT_CONNECTION="SignalDeck-Setup"
 
@@ -109,10 +110,14 @@ install_application() {
 write_default_config() {
   if [[ -f "${CONFIG_DIR}/player.toml" ]]; then
     log "Keeping existing ${CONFIG_DIR}/player.toml."
+    if [[ -n "${SIGNALDECK_SERVER_URL:-}" ]]; then
+      log "Updating player server URL to ${SERVER_URL}."
+      update_config_server_url "${CONFIG_DIR}/player.toml" "${SERVER_URL}"
+    fi
   else
     log "Writing default player config."
-    cat >"${CONFIG_DIR}/player.toml" <<'TOML'
-server_url = "https://cms.berry-secure.pl"
+    cat >"${CONFIG_DIR}/player.toml" <<TOML
+server_url = "${SERVER_URL}"
 device_model = "Raspberry Pi 5"
 player_type = "video_premium"
 app_version = "rpi-video-premium-0.1.0"
@@ -166,6 +171,30 @@ write_webui_secret() {
   else
     write_secret_once "${CONFIG_DIR}/webui.secret" 32
   fi
+}
+
+update_config_server_url() {
+  local path="$1"
+  local server_url="$2"
+  SIGNALDECK_TARGET_SERVER_URL="${server_url}" python3 - "${path}" <<'PY'
+from pathlib import Path
+import os
+import re
+import sys
+
+path = Path(sys.argv[1])
+server_url = os.environ["SIGNALDECK_TARGET_SERVER_URL"].strip().rstrip("/")
+if not server_url.startswith("https://"):
+    raise SystemExit("SIGNALDECK_SERVER_URL must start with https://")
+
+line = f'server_url = "{server_url}"'
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+if re.search(r"(?m)^server_url\s*=", text):
+    text = re.sub(r'(?m)^server_url\s*=.*$', line, text, count=1)
+else:
+    text = f"{line}\n{text}"
+path.write_text(text, encoding="utf-8")
+PY
 }
 
 write_systemd_units() {
@@ -232,6 +261,7 @@ enable_services() {
 print_summary() {
   log "Install complete."
   printf '\nWebUI: http://player.local:8080 or http://10.42.0.1:8080 in setup mode\n'
+  printf 'Server URL: %s\n' "$(grep -E '^server_url[[:space:]]*=' "${CONFIG_DIR}/player.toml" | head -1 | cut -d '"' -f 2)"
   printf 'WebUI secret: %s\n' "$(cat "${CONFIG_DIR}/webui.secret")"
   printf 'Hotspot secret: %s\n' "$(cat "${CONFIG_DIR}/hotspot.secret")"
   printf '\nReset setup mode with:\n  sudo rm %s/SIGNALDECK_LOCK && sudo reboot\n' "${BOOT_DIR}"

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
-DEFAULT_SERVER_URL = "https://cms.berry-secure.pl"
+DEFAULT_SERVER_URL = "https://maask-ds.online"
 
 
 @dataclass(frozen=True)
@@ -83,30 +83,34 @@ def load_config(path: str | Path) -> PlayerConfig:
 
 
 def default_config_toml() -> str:
-    return """server_url = "https://cms.berry-secure.pl"
-device_model = "Raspberry Pi 5"
-player_type = "video_premium"
-app_version = "rpi-video-premium-0.1.0"
-cache_limit_mb = 20480
-heartbeat_interval_seconds = 15
+    return render_config_toml(default_config())
+
+
+def render_config_toml(
+    config: PlayerConfig,
+    server_url: str | None = None,
+    sync_mode: str | None = None,
+    sync_policy: str | None = None,
+    tolerance_ms: int | None = None,
+) -> str:
+    outputs = "\n".join(
+        f'\n[[outputs]]\nname = "{output.name}"\nserial_suffix = "{output.serial_suffix}"\nenabled = {"true" if output.enabled else "false"}\n'
+        for output in config.outputs
+    )
+    return f'''server_url = "{(server_url or config.server_url).strip().rstrip("/")}"
+device_model = "{config.device_model}"
+player_type = "{config.player_type}"
+app_version = "{config.app_version}"
+cache_limit_mb = {config.cache_limit_mb}
+heartbeat_interval_seconds = {config.heartbeat_interval_seconds}
 
 [sync]
-mode = "independent"
-group = "dual-hdmi"
-policy = "best_effort"
-tolerance_ms = 250
-group_blackout = true
-
-[[outputs]]
-name = "HDMI-A-1"
-serial_suffix = "A"
-enabled = true
-
-[[outputs]]
-name = "HDMI-A-2"
-serial_suffix = "B"
-enabled = true
-"""
+mode = "{sync_mode or config.sync.mode}"
+group = "{config.sync.group}"
+policy = "{sync_policy or config.sync.policy}"
+tolerance_ms = {max(tolerance_ms if tolerance_ms is not None else config.sync.tolerance_ms, 0)}
+group_blackout = {"true" if config.sync.group_blackout else "false"}
+{outputs}'''
 
 
 def write_default_config(path: str | Path) -> bool:

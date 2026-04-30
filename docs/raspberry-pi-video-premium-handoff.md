@@ -6,7 +6,7 @@ Ten dokument jest instrukcja do nowego watku, w ktorym ma powstac skrypt przygot
 
 - Repozytorium lokalne: `/Users/przeczacyklif/Movies/digital-signage`
 - Repozytorium GitHub: `https://github.com/berry-secure/digital-signage.git`
-- Produkcyjny CMS/API: `https://cms.berry-secure.pl`
+- Produkcyjny CMS/API: `https://maask-ds.online`
 - Aktualny player Android TV juz dziala z CMS, a backend ma endpointy device session, live commands, device logs i playback events.
 - Ten etap dotyczy nowego fizycznego playera Raspberry Pi 5, bez psucia Android TV/APK.
 
@@ -127,7 +127,7 @@ Agent ma korzystac z tych endpointow:
 
 ### Session / heartbeat
 
-`POST https://cms.berry-secure.pl/api/player/session`
+`POST https://maask-ds.online/api/player/session`
 
 Body per output:
 
@@ -163,7 +163,7 @@ Response:
         "playlistId": "...",
         "title": "Clip",
         "kind": "video",
-        "url": "https://cms.berry-secure.pl/uploads/file.mp4",
+        "url": "https://maask-ds.online/uploads/file.mp4",
         "durationSeconds": 30,
         "volumePercent": 100,
         "hasAudio": true,
@@ -207,7 +207,7 @@ Response:
   "context": {
     "output": "HDMI-A-1",
     "mediaId": "playlist-item-id:0",
-    "url": "https://cms.berry-secure.pl/uploads/file.mp4"
+    "url": "https://maask-ds.online/uploads/file.mp4"
   },
   "appVersion": "rpi-video-premium-0.1.0",
   "osVersion": "Raspberry Pi OS Lite 64-bit",
@@ -344,7 +344,7 @@ Minimalne ekrany:
   - temperatura RPi,
   - miejsce na dysku/cache.
 - konfiguracja:
-  - server URL, domyslnie `https://cms.berry-secure.pl`,
+  - server URL, domyslnie `https://maask-ds.online`,
   - Wi-Fi SSID i haslo,
   - DHCP/static LAN,
   - test polaczenia z CMS,
@@ -439,7 +439,7 @@ Pakiety moga sie zmienic po probe runtime. Jesli implementacja wybierze Go, inst
 `/etc/signaldeck/player.toml`:
 
 ```toml
-server_url = "https://cms.berry-secure.pl"
+server_url = "https://maask-ds.online"
 device_model = "Raspberry Pi 5"
 player_type = "video_premium"
 app_version = "rpi-video-premium-0.1.0"
@@ -583,6 +583,7 @@ Globalne, jesli przyjda na ktorykolwiek output:
 - `reboot_os`: `systemctl reboot`.
 - `clear_cache`: wyczysc cache obu outputow, ale nie kasuj aktualnie odtwarzanego pliku.
 - `upload_logs`: w v1 ACK i wpis w device logs, pelny upload moze poczekac.
+- `set_server_url`: zapisuje nowy `server_url` z `payload.serverUrl`, wymaga `https://`, ACK do starego CMS i restart `signaldeck-agent`.
 
 Nieobslugiwane w v1:
 
@@ -617,7 +618,7 @@ Player jest gotowy do pierwszego testu, gdy:
 1. Swiezy Raspberry Pi OS Lite 64 po instalacji startuje bez desktopu.
 2. Gdy nie ma konfiguracji, pojawia sie hotspot `SignalDeck-XXXX`.
 3. WebUI jest dostepne pod `http://10.42.0.1:8080`.
-4. Po zapisaniu `server_url=https://cms.berry-secure.pl` i restarcie hotspot gasnie.
+4. Po zapisaniu `server_url=https://maask-ds.online` i restarcie hotspot gasnie.
 5. W CMS pojawiaja sie dwa pending devices.
 6. Oba pending devices mozna zatwierdzic jako `Video Premium`.
 7. Kazdy output mozna przypisac do innego kanalu CMS.
@@ -664,7 +665,7 @@ GitHub:
 https://github.com/berry-secure/digital-signage.git
 
 Produkcyjny CMS/API:
-https://cms.berry-secure.pl
+https://maask-ds.online
 
 Zadanie:
 Zaimplementuj pierwszy pakiet Raspberry Pi 5 Video Premium player. Ma powstac skrypt `scripts/rpi/install-video-premium.sh` dla swiezego Raspberry Pi OS Lite 64-bit oraz minimalny agent/WebUI, jezeli repo jeszcze ich nie ma.

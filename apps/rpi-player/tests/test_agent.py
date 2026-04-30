@@ -1,11 +1,12 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from signaldeck_rpi.agent import AgentRuntime
 from signaldeck_rpi.cache import MediaCache
 from signaldeck_rpi.cms import CmsClient
-from signaldeck_rpi.config import default_config
+from signaldeck_rpi.config import OutputConfig, default_config, load_config
 from signaldeck_rpi.identity import load_or_create_identity
 
 
@@ -79,6 +80,15 @@ class FakePlaybackController:
 class FailingAckCmsClient(FakeCmsClient):
     def ack_command(self, command_id, serial, secret, status, message):
         raise RuntimeError("database timeout")
+
+
+class ServerUrlCommandCmsClient(FakeCmsClient):
+    def post_session(self, payload):
+        response = super().post_session(payload)
+        response["commands"] = [
+            {"id": "server-url-command", "type": "set_server_url", "payload": {"serverUrl": "https://maask-ds.online/"}}
+        ]
+        return response
 
 
 class FakeMediaCache(MediaCache):
@@ -203,8 +213,34 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertTrue(any(log[2] == "command" and "failed to ack" in log[3] for log in cms.logs))
             self.assertTrue(any("failed to ack command" in line for line in logs.output))
 
-    def _runtime(self, root: Path, cms=None, cache=None, playback=None, proof=None):
-        config = default_config()
+    def test_poll_once_applies_server_url_command_after_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "player.toml"
+            config_path.write_text(
+                'server_url = "https://cms.berry-secure.pl"\n[[outputs]]\nname = "HDMI-A-1"\nserial_suffix = "A"\nenabled = true\n',
+                encoding="utf-8",
+            )
+            commands = []
+            config = replace(load_config(config_path), outputs=[OutputConfig("HDMI-A-1", "A", True)])
+            runtime = self._runtime(
+                root,
+                ServerUrlCommandCmsClient(),
+                config=config,
+                config_path=config_path,
+                runner=lambda command, allow_failure=False: commands.append((command, allow_failure)),
+            )
+
+            runtime.poll_once()
+
+            self.assertIn('server_url = "https://maask-ds.online"', config_path.read_text(encoding="utf-8"))
+            self.assertEqual(runtime.config.server_url, "https://maask-ds.online")
+            self.assertEqual(runtime.cms.acks[0][0], "server-url-command")
+            self.assertEqual(runtime.cms.acks[0][2], "acked")
+            self.assertEqual(commands, [(["bash", "-lc", "(sleep 1; systemctl restart signaldeck-agent.service) >/dev/null 2>&1 &"], True)])
+
+    def _runtime(self, root: Path, cms=None, cache=None, playback=None, proof=None, config=None, config_path=None, runner=None):
+        config = config or default_config()
         identity = load_or_create_identity(root / "identity.json", "MK5ABC123", config.outputs)
         return AgentRuntime(
             config,
@@ -213,6 +249,8 @@ class AgentRuntimeTest(unittest.TestCase):
             cache or FakeMediaCache(root),
             playback_controller=playback or FakePlaybackController(),
             proof_reporter=proof or FakeProofReporter(),
+            config_path=config_path or root / "player.toml",
+            runner=runner or (lambda command, allow_failure=False: None),
         )
 
 

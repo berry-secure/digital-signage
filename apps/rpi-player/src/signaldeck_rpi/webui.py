@@ -16,7 +16,7 @@ import socket
 import subprocess
 from urllib.parse import parse_qs
 
-from .config import PlayerConfig, load_config
+from .config import PlayerConfig, load_config, render_config_toml
 from .identity import PlayerIdentity, load_or_create_system_identity
 from .playback import probe_drm_connector_states
 
@@ -239,7 +239,13 @@ class WebUiApp:
         sync_mode = fields.get("sync_mode", config.sync.mode).strip() or config.sync.mode
         sync_policy = fields.get("sync_policy", config.sync.policy).strip() or config.sync.policy
         tolerance_ms = _int(fields.get("tolerance_ms"), config.sync.tolerance_ms)
-        payload = _render_config_toml(config, server_url, sync_mode, sync_policy, tolerance_ms)
+        payload = render_config_toml(
+            config,
+            server_url=server_url,
+            sync_mode=sync_mode,
+            sync_policy=sync_policy,
+            tolerance_ms=tolerance_ms,
+        )
         self.provider.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.provider.config_path.write_text(payload, encoding="utf-8")
         self.provider.config_path.chmod(0o640)
@@ -470,27 +476,6 @@ def _options(selected: str, values: list[str]) -> str:
         f'<option value="{html.escape(value)}"{" selected" if value == selected else ""}>{html.escape(value)}</option>'
         for value in values
     )
-
-
-def _render_config_toml(config: PlayerConfig, server_url: str, sync_mode: str, sync_policy: str, tolerance_ms: int) -> str:
-    outputs = "\n".join(
-        f'\n[[outputs]]\nname = "{output.name}"\nserial_suffix = "{output.serial_suffix}"\nenabled = {"true" if output.enabled else "false"}\n'
-        for output in config.outputs
-    )
-    return f'''server_url = "{server_url}"
-device_model = "{config.device_model}"
-player_type = "{config.player_type}"
-app_version = "{config.app_version}"
-cache_limit_mb = {config.cache_limit_mb}
-heartbeat_interval_seconds = {config.heartbeat_interval_seconds}
-
-[sync]
-mode = "{sync_mode}"
-group = "{config.sync.group}"
-policy = "{sync_policy}"
-tolerance_ms = {max(tolerance_ms, 0)}
-group_blackout = {"true" if config.sync.group_blackout else "false"}
-{outputs}'''
 
 
 def _int(value: str | None, fallback: int) -> int:

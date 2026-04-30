@@ -22,7 +22,7 @@ class WebUiTest(unittest.TestCase):
         self.assertEqual(body["baseSerial"], "MK5ABC123")
         self.assertIn("HDMI-A-1", body["outputs"])
         self.assertIn("HDMI-A-2", body["outputs"])
-        self.assertEqual(body["serverUrl"], "https://cms.berry-secure.pl")
+        self.assertEqual(body["serverUrl"], "https://maask-ds.online")
 
     def test_webui_renders_html_with_status_payload(self):
         with tempfile.TemporaryDirectory() as directory:
