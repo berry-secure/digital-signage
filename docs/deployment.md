@@ -2,7 +2,7 @@
 
 Aktualna produkcja działa na VPS z Coolify pod:
 
-- `https://cms.berry-secure.pl`
+- `https://maasck-ds.online`
 
 Ta domena jest aktualnym production defaultem. Kod nadal korzysta z envów (`PUBLIC_BASE_URL`, `DATABASE_URL`, później `API_BASE_URL` / `UPDATE_BASE_URL`), żeby w przyszłości dało się zmienić domenę albo przenieść platformę na inny VPS bez przepisywania logiki aplikacji.
 
@@ -15,7 +15,7 @@ W Coolify trzymaj jeden główny serwis dla CMS + API:
 - Build Pack: `Dockerfile`
 - Dockerfile location: `/Dockerfile`
 - Port aplikacji: `3000`
-- Public domain: `https://cms.berry-secure.pl`
+- Public domain: `https://maasck-ds.online`
 
 Repo zawiera `Dockerfile` oparty o oficjalny obraz `node:22-bookworm-slim`. To omija problem Nixpacks, który potrafi wybrać Node `22.11.0`, a Prisma 7 wymaga minimum `22.12.0`.
 
@@ -33,8 +33,8 @@ Minimalne envy dla obecnej produkcji:
 ```bash
 NODE_ENV=production
 PORT=3000
-PUBLIC_BASE_URL=https://cms.berry-secure.pl
-ADMIN_EMAIL=owner@berry-secure.pl
+PUBLIC_BASE_URL=https://maasck-ds.online
+ADMIN_EMAIL=TWOJ_EMAIL_ADMINA
 ADMIN_PASSWORD=TU_MOCNE_HASLO_ADMINA
 ADMIN_NAME=Berry Secure Owner
 DATA_DIR=/data
@@ -116,7 +116,7 @@ apps/cms/public/app/maasck.apk
 Po deployu CMS link będzie dostępny pod:
 
 ```bash
-https://cms.berry-secure.pl/app/maasck.apk
+https://maasck-ds.online/app/maasck.apk
 ```
 
 ## 5. Player Android TV
@@ -124,7 +124,7 @@ https://cms.berry-secure.pl/app/maasck.apk
 Obecny player produkcyjnie łączy się z:
 
 ```bash
-https://cms.berry-secure.pl
+https://maasck-ds.online
 ```
 
 Flow pozostaje bez zmian:
@@ -137,7 +137,7 @@ Flow pozostaje bez zmian:
 
 ## 6. Ważne Zasady
 
-- Nie zmieniaj domeny produkcyjnej teraz; trzymaj `PUBLIC_BASE_URL=https://cms.berry-secure.pl`.
+- Po zmianie domeny trzymaj `PUBLIC_BASE_URL=https://maasck-ds.online` i usuń stare domeny z konfiguracji Coolify dopiero po potwierdzeniu, że DNS oraz certyfikat działają.
 - Nie ustawiaj `DATABASE_URL` bez `npm run prisma:migrate:deploy --workspace @ds/server` i dry-run importu JSON.
 - Nie uruchamiaj `migrate:json:postgres -- --apply` bez backupu `/data`.
 - Uploady zostają na trwałym wolumenie `/data/uploads`, dopóki nie przejdziemy na storage S3-ready.

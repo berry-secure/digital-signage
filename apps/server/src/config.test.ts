@@ -8,6 +8,8 @@ describe("server config", () => {
 
     assert.equal(config.storageMode, "json");
     assert.equal(config.databaseUrl, "");
+    assert.equal(config.adminEmail, "");
+    assert.equal(config.adminPassword, "");
   });
 
   it("uses Prisma storage when DATABASE_URL is present", () => {

@@ -514,7 +514,7 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>("overview");
   const [flash, setFlash] = useState<FlashMessage | null>(null);
-  const [loginForm, setLoginForm] = useState({ email: "admin@berry-secure.pl", password: "berry-secure-admin" });
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [userForm, setUserForm] = useState<UserFormState>(emptyUserForm);
   const [clientForm, setClientForm] = useState<ClientFormState>(emptyClientForm);
   const [clientModalOpen, setClientModalOpen] = useState(false);

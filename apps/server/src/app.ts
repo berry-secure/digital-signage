@@ -42,8 +42,8 @@ let cmsPublicDir = join(rootDir, "apps/cms/public");
 
 let port = Number(process.env.PORT || 3000);
 let publicBaseUrl = (process.env.PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
-let adminEmail = (process.env.ADMIN_EMAIL || "admin@berry-secure.pl").trim().toLowerCase();
-let adminPassword = (process.env.ADMIN_PASSWORD || "berry-secure-admin").trim();
+let adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+let adminPassword = (process.env.ADMIN_PASSWORD || "").trim();
 let adminName = (process.env.ADMIN_NAME || "Berry Secure Admin").trim();
 let storageMode: "json" | "prisma" = "json";
 let databaseUrl = "";
@@ -100,10 +100,10 @@ export function resolveServerConfig(config: ServerConfig = {}) {
     publicBaseUrl: String(config.publicBaseUrl ?? env.PUBLIC_BASE_URL ?? "")
       .trim()
       .replace(/\/$/, ""),
-    adminEmail: String(config.adminEmail || env.ADMIN_EMAIL || "admin@berry-secure.pl")
+    adminEmail: String(config.adminEmail || env.ADMIN_EMAIL || "")
       .trim()
       .toLowerCase(),
-    adminPassword: String(config.adminPassword || env.ADMIN_PASSWORD || "berry-secure-admin").trim(),
+    adminPassword: String(config.adminPassword || env.ADMIN_PASSWORD || "").trim(),
     adminName: String(config.adminName || env.ADMIN_NAME || "Berry Secure Admin").trim()
   };
 }
@@ -2582,6 +2582,10 @@ function verifyPassword(password, storedHash) {
 }
 
 async function ensureAdminAccount() {
+  if (!adminEmail || !adminPassword) {
+    return;
+  }
+
   if (!database.users.length) {
     database.users.push({
       id: randomUUID(),
