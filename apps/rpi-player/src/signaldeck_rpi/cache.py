@@ -8,6 +8,8 @@ import json
 import os
 import re
 
+MEDIA_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".jpg", ".jpeg", ".png", ".bin"}
+
 
 def cache_key(item: dict[str, Any]) -> str:
     media_id = str(item.get("mediaId") or item.get("media_id") or "").strip()
@@ -53,6 +55,12 @@ class MediaCache:
 
     def legacy_path_for(self, output: str, item: dict[str, Any]) -> Path:
         return self.output_dir(output) / _legacy_cache_key(item)
+
+    def cached_media_paths(self, output: str) -> list[Path]:
+        paths: list[Path] = []
+        for directory in (self.media_dir(), self.output_dir(output)):
+            paths.extend(_cached_media_files(directory))
+        return paths
 
     def store_bytes(self, output: str, item: dict[str, Any], data: bytes) -> Path:
         destination = self.path_for(output, item)
@@ -157,3 +165,15 @@ def _legacy_cache_key(item: dict[str, Any]) -> str:
     source = str(item.get("checksum") or item.get("contentVersion") or f"{item.get('id', '')}:{item.get('url', '')}")
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
     return f"{digest}{_extension(str(item.get('url') or ''))}"
+
+
+def _cached_media_files(directory: Path) -> list[Path]:
+    if not directory.exists():
+        return []
+    return sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file()
+        and path.suffix.lower() in MEDIA_SUFFIXES
+        and not path.name.endswith((".partial", ".part", ".tmp"))
+    )

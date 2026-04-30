@@ -20,6 +20,7 @@ from .proof import ProofOfPlayReporter
 
 LOGGER = logging.getLogger("signaldeck.agent")
 MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 10
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
 
 @dataclass
@@ -200,9 +201,40 @@ class AgentRuntime:
     def _sync_cached_playback(self, output: str, serial: str, secret: str) -> None:
         queue = self.cache.read_manifest(output)
         if not queue:
+            self._sync_cached_files_playback(output, serial, secret)
             return
         self.states.setdefault(output, OutputState()).last_message = "Offline, playing cached playlist"
         self._sync_playback(output, serial, secret, queue, allow_download=False)
+
+    def _sync_cached_files_playback(self, output: str, serial: str, secret: str) -> None:
+        state = self.states.setdefault(output, OutputState())
+        paths = self.cache.cached_media_paths(output)
+        if not paths:
+            state.last_message = "Offline, no cached playlist or media"
+            LOGGER.warning("no cached manifest or media for %s; waiting for CMS session", output)
+            return
+        if not self._is_output_connected(output):
+            self.playback_controller.stop(output)
+            self._stop_proof(output)
+            state.current_item_id = ""
+            return
+        if state.desired_display_state == "blackout":
+            self.playback_controller.stop(output)
+            self._stop_proof(output)
+            state.current_item_id = ""
+            return
+
+        queue = [_cached_file_item(path, index) for index, path in enumerate(paths)]
+        queue_id = "cached-files|" + "|".join(str(path) for path in paths)
+        if state.current_item_id == queue_id and self.playback_controller.is_running(output):
+            return
+
+        command = build_mpv_playlist_command(paths, output, 100, _first_image_duration(queue))
+        self.playback_controller.play(output, command)
+        self._start_proof(output, serial, secret, state.device_id, queue)
+        state.current_item_id = queue_id
+        state.last_message = "Offline, playing cached media files"
+        LOGGER.warning("started fallback cached-file playback on %s with %s file(s)", output, len(paths))
 
     def _prepare_media(self, output: str, items: list[dict[str, Any]], allow_download: bool) -> list[tuple[dict[str, Any], Path]]:
         media_entries: list[tuple[dict[str, Any], Path]] = []
@@ -356,6 +388,21 @@ def _first_image_duration(queue: list[dict[str, Any]]) -> int | float:
         if str(item.get("kind") or "").lower() == "image":
             return item.get("durationSeconds") or 10
     return 10
+
+
+def _cached_file_item(path: Path, index: int) -> dict[str, Any]:
+    kind = "image" if path.suffix.lower() in IMAGE_SUFFIXES else "video"
+    return {
+        "id": f"cached-file:{path.name}",
+        "title": path.name,
+        "kind": kind,
+        "durationSeconds": 10,
+        "volumePercent": 100,
+        "sourceType": "cache",
+        "contentVersion": 0,
+        "url": str(path),
+        "cacheIndex": index,
+    }
 
 
 def _build_log_payload(

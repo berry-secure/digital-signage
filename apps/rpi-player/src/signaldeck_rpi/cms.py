@@ -64,11 +64,16 @@ class CmsClient:
         except HTTPError as error:
             detail = _decode_response(error.read())
             message = detail.get("message") if isinstance(detail, dict) else ""
-            raise RuntimeError(message or f"CMS request failed with HTTP {error.code}") from error
+            suffix = f": {message}" if message else ""
+            raise RuntimeError(f"CMS request failed with HTTP {error.code} on {path}{suffix}") from error
 
 
 def _decode_response(data: bytes) -> dict[str, Any]:
     if not data:
         return {}
-    parsed = json.loads(data.decode("utf-8"))
+    text = data.decode("utf-8", errors="replace")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"message": text}
     return parsed if isinstance(parsed, dict) else {"data": parsed}

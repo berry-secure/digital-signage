@@ -107,6 +107,18 @@ class CacheTest(unittest.TestCase):
 
             self.assertEqual(cache.cached_path("HDMI-A-1", item), legacy_path)
 
+    def test_cached_media_paths_finds_shared_and_legacy_media_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MediaCache(Path(directory), cache_limit_mb=64)
+            shared = cache.media_dir() / "shared.mp4"
+            legacy = cache.output_dir("HDMI-A-1") / "legacy.mov"
+            partial = cache.media_dir() / "ignored.mp4.partial"
+            shared.write_bytes(b"shared")
+            legacy.write_bytes(b"legacy")
+            partial.write_bytes(b"partial")
+
+            self.assertEqual(cache.cached_media_paths("HDMI-A-1"), [shared, legacy])
+
 
 if __name__ == "__main__":
     unittest.main()

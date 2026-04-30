@@ -310,6 +310,23 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertEqual(len([arg for arg in playback.played[0][1] if arg.endswith(".mp4")]), 1)
             self.assertEqual(cache.downloaded, [])
 
+    def test_poll_once_plays_cached_media_files_when_session_fails_without_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = FakeMediaCache(root)
+            media_path = cache.media_dir() / "orphaned.mp4"
+            media_path.write_bytes(b"cached-media")
+            playback = FakePlaybackController()
+            proof = FakeProofReporter()
+            runtime = self._runtime(root, OfflineCmsClient(), cache, playback, proof)
+            runtime.connector_status = {"HDMI-A-1": True, "HDMI-A-2": False}
+
+            runtime.poll_once()
+
+            self.assertEqual([entry[0] for entry in playback.played], ["HDMI-A-1"])
+            self.assertIn(str(media_path), playback.played[0][1])
+            self.assertEqual(proof.started, [("HDMI-A-1", "MK5ABC123A", "", ["cached-file:orphaned.mp4"])])
+
     def test_start_cached_playback_plays_manifest_without_polling_cms(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

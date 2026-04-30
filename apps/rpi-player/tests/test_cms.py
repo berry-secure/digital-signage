@@ -1,5 +1,7 @@
 import json
 import unittest
+from io import BytesIO
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from signaldeck_rpi.cms import CmsClient
@@ -52,6 +54,22 @@ class CmsClientTest(unittest.TestCase):
         self.assertEqual(requests[2][1]["severity"], "warn")
         self.assertEqual(requests[3][1]["status"], "started")
         self.assertEqual(requests[0][2], 2)
+
+    def test_http_errors_include_status_and_endpoint(self):
+        def fake_urlopen(request, timeout):
+            raise HTTPError(
+                request.full_url,
+                500,
+                "Internal Server Error",
+                {},
+                BytesIO(json.dumps({"message": "Serwer napotkał błąd"}).encode("utf-8")),
+            )
+
+        client = CmsClient("https://cms.example.test", timeout_seconds=2)
+
+        with patch("signaldeck_rpi.cms.urlopen", fake_urlopen):
+            with self.assertRaisesRegex(RuntimeError, r"HTTP 500 .* /api/player/session: Serwer napotkał błąd"):
+                client.post_session({"serial": "MK1", "secret": "secret"})
 
 
 if __name__ == "__main__":
