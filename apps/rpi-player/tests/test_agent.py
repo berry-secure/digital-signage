@@ -67,7 +67,9 @@ class FakeProofReporter:
     def stop_output(self, output):
         self.stopped.append(output)
 
-    def flush_pending(self, max_items=None):
+    def flush_pending(self, max_items=None, progress=None):
+        if progress:
+            progress()
         self.flushed += 1
         return 0
 
@@ -77,7 +79,9 @@ class OrderedProofReporter(FakeProofReporter):
         super().__init__()
         self.events = events
 
-    def flush_pending(self, max_items=None):
+    def flush_pending(self, max_items=None, progress=None):
+        if progress:
+            progress()
         self.events.append(("proof_flush", max_items))
         return 0
 
@@ -114,7 +118,9 @@ class OrderedLogSpool:
     def __init__(self, events):
         self.events = events
 
-    def flush(self, sender, max_items=None):
+    def flush(self, sender, max_items=None, progress=None):
+        if progress:
+            progress()
         self.events.append(("log_flush", max_items))
         return 0
 
@@ -149,18 +155,20 @@ class FakeMediaCache(MediaCache):
         super().__init__(root, 64)
         self.downloaded = []
 
-    def download(self, output, item, timeout_seconds=30):
+    def download(self, output, item, timeout_seconds=30, progress=None):
         self.downloaded.append((output, item["id"]))
+        if progress:
+            progress()
         path = self.path_for(output, item)
         path.write_bytes(b"fake-media")
         return path
 
 
 class FailingMediaCache(FakeMediaCache):
-    def download(self, output, item, timeout_seconds=30):
+    def download(self, output, item, timeout_seconds=30, progress=None):
         if item["id"] == "item:1":
             raise RuntimeError("download failed")
-        return super().download(output, item, timeout_seconds)
+        return super().download(output, item, timeout_seconds, progress=progress)
 
 
 class AgentRuntimeTest(unittest.TestCase):
@@ -229,6 +237,29 @@ class AgentRuntimeTest(unittest.TestCase):
 
             self.assertEqual(events[:2], [("play", "HDMI-A-1"), ("play", "HDMI-A-2")])
             self.assertEqual(events[2:], [("proof_flush", 20), ("log_flush", 20)])
+
+    def test_poll_once_notifies_watchdog_during_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ticks = []
+            runtime = self._runtime(root, watchdog=lambda: ticks.append("tick"))
+
+            runtime.poll_once()
+
+            self.assertGreaterEqual(len(ticks), 5)
+
+    def test_poll_once_notifies_watchdog_while_flushing_backlog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ticks = []
+            proof = FakeProofReporter()
+            log_spool = OrderedLogSpool([])
+            runtime = self._runtime(root, proof=proof, log_spool=log_spool, watchdog=lambda: ticks.append("tick"))
+
+            runtime.poll_once()
+
+            self.assertGreaterEqual(proof.flushed, 1)
+            self.assertGreaterEqual(len(ticks), 7)
 
     def test_poll_once_does_not_restart_same_running_item(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -386,7 +417,20 @@ class AgentRuntimeTest(unittest.TestCase):
             self.assertEqual(runtime.cms.acks[0][2], "acked")
             self.assertEqual(commands, [(["bash", "-lc", "(sleep 1; systemctl restart signaldeck-agent.service) >/dev/null 2>&1 &"], True)])
 
-    def _runtime(self, root: Path, cms=None, cache=None, playback=None, proof=None, log_spool=None, config=None, config_path=None, identity_path=None, runner=None):
+    def _runtime(
+        self,
+        root: Path,
+        cms=None,
+        cache=None,
+        playback=None,
+        proof=None,
+        log_spool=None,
+        config=None,
+        config_path=None,
+        identity_path=None,
+        runner=None,
+        watchdog=None,
+    ):
         config = config or default_config()
         identity = load_or_create_identity(identity_path or root / "identity.json", "MK5ABC123", config.outputs)
         return AgentRuntime(
@@ -399,6 +443,7 @@ class AgentRuntimeTest(unittest.TestCase):
             log_spool=log_spool,
             config_path=config_path or root / "player.toml",
             runner=runner or (lambda command, allow_failure=False: None),
+            watchdog=watchdog,
         )
 
 

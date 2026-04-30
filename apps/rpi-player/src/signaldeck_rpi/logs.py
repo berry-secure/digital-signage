@@ -30,14 +30,23 @@ class LogSpool:
         os.replace(partial, path)
         return path
 
-    def flush(self, sender: Callable[[dict[str, Any]], Any], max_items: int | None = None) -> int:
+    def flush(
+        self,
+        sender: Callable[[dict[str, Any]], Any],
+        max_items: int | None = None,
+        progress: Callable[[], None] | None = None,
+    ) -> int:
         sent = 0
         pending_files = self._pending_files()
         if max_items is not None:
             pending_files = pending_files[: max(max_items, 0)]
         for path in pending_files:
             try:
+                if progress:
+                    progress()
                 sender(json.loads(path.read_text(encoding="utf-8")))
+                if progress:
+                    progress()
                 path.unlink(missing_ok=True)
                 sent += 1
             except Exception as error:

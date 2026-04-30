@@ -19,6 +19,7 @@ from .playback import MvpProcessController, build_mpv_playlist_command, playback
 from .proof import ProofOfPlayReporter
 
 LOGGER = logging.getLogger("signaldeck.agent")
+MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 10
 
 
 @dataclass
@@ -43,6 +44,7 @@ class AgentRuntime:
     log_spool: Any | None = None
     config_path: Path = Path("/etc/signaldeck/player.toml")
     runner: Callable[[list[str], bool], object] | None = None
+    watchdog: Callable[[], None] | None = None
     states: dict[str, OutputState] = field(default_factory=dict)
     connector_status: dict[str, bool] | None = None
 
@@ -72,6 +74,7 @@ class AgentRuntime:
     def poll_once(self) -> list[dict[str, Any]]:
         responses: list[dict[str, Any]] = []
         connected = False
+        self._notify_watchdog()
         for output, payload in zip(self.enabled_output_names(), self.build_session_payloads()):
             output_identity = self.identity.outputs[output]
             try:
@@ -79,13 +82,16 @@ class AgentRuntime:
             except Exception as error:
                 LOGGER.warning("session poll failed for %s: %s", output, error)
                 self._sync_cached_playback(output, output_identity.serial, output_identity.secret)
+                self._notify_watchdog()
                 continue
 
             connected = True
             responses.append(response)
+            self._notify_watchdog()
             self._update_state(output, response)
             queue = _queue_from_response(response)
             self._sync_playback(output, output_identity.serial, output_identity.secret, queue)
+            self._notify_watchdog()
 
             for command in response.get("commands") or []:
                 action = route_command(command)
@@ -113,6 +119,7 @@ class AgentRuntime:
                     self._log(output_identity.serial, output_identity.secret, "warn", "command", message, {"command": command})
         if connected:
             self._flush_pending(max_items=20)
+            self._notify_watchdog()
         return responses
 
     def enabled_output_names(self) -> list[str]:
@@ -126,6 +133,7 @@ class AgentRuntime:
         for output in self.enabled_output_names():
             output_identity = self.identity.outputs[output]
             self._sync_cached_playback(output, output_identity.serial, output_identity.secret)
+            self._notify_watchdog()
 
     def _update_state(self, output: str, response: dict[str, Any]) -> None:
         state = self.states.setdefault(output, OutputState())
@@ -200,7 +208,17 @@ class AgentRuntime:
         media_entries: list[tuple[dict[str, Any], Path]] = []
         for item in items:
             if allow_download:
-                media_entries.append((item, self.cache.download(output, item)))
+                media_entries.append(
+                    (
+                        item,
+                        self.cache.download(
+                            output,
+                            item,
+                            timeout_seconds=MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+                            progress=self._notify_watchdog,
+                        ),
+                    )
+                )
                 continue
             path = self.cache.cached_path(output, item)
             if path is not None:
@@ -261,11 +279,15 @@ class AgentRuntime:
     def _run(self, command: list[str], allow_failure: bool = False) -> object:
         return (self.runner or _run)(command, allow_failure)
 
+    def _notify_watchdog(self) -> None:
+        if self.watchdog:
+            self.watchdog()
+
     def _flush_pending(self, max_items: int | None = None) -> None:
         if self.proof_reporter:
-            self.proof_reporter.flush_pending(max_items=max_items)
+            self.proof_reporter.flush_pending(max_items=max_items, progress=self._notify_watchdog)
         if self.log_spool:
-            self.log_spool.flush(self.cms.post_log_payload, max_items=max_items)
+            self.log_spool.flush(self.cms.post_log_payload, max_items=max_items, progress=self._notify_watchdog)
 
 
 def create_runtime(
@@ -280,7 +302,16 @@ def create_runtime(
     cache = MediaCache(state_root, config.cache_limit_mb)
     proof_reporter = ProofOfPlayReporter(cms, Path(state_root) / "proof-of-play", config.app_version)
     log_spool = LogSpool(Path(state_root) / "queue" / "logs")
-    return AgentRuntime(config, identity, cms, cache, proof_reporter=proof_reporter, log_spool=log_spool, config_path=Path(config_path))
+    return AgentRuntime(
+        config,
+        identity,
+        cms,
+        cache,
+        proof_reporter=proof_reporter,
+        log_spool=log_spool,
+        config_path=Path(config_path),
+        watchdog=lambda: notify_systemd("WATCHDOG=1"),
+    )
 
 
 def run_forever(runtime: AgentRuntime) -> None:

@@ -2,8 +2,23 @@ import tempfile
 import unittest
 import hashlib
 from pathlib import Path
+from unittest.mock import patch
 
 from signaldeck_rpi.cache import MediaCache, cache_key
+
+
+class ChunkedResponse:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, size=-1):
+        return self.chunks.pop(0) if self.chunks else b""
 
 
 class CacheTest(unittest.TestCase):
@@ -45,16 +60,52 @@ class CacheTest(unittest.TestCase):
             self.assertFalse(path.with_suffix(path.suffix + ".partial").exists())
             self.assertIn("/cache/media/", path.as_posix())
 
+    def test_download_reports_progress_for_each_chunk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MediaCache(Path(directory), cache_limit_mb=64)
+            item = {"id": "item:0", "url": "https://cms.example.test/uploads/file.mp4"}
+            progress = []
+
+            with patch("signaldeck_rpi.cache.urlopen", return_value=ChunkedResponse([b"one", b"two"])):
+                path = cache.download("HDMI-A-1", item, progress=lambda: progress.append("tick"))
+
+            self.assertEqual(path.read_bytes(), b"onetwo")
+            self.assertEqual(progress, ["tick", "tick"])
+
     def test_store_bytes_rejects_sha256_checksum_mismatch(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = MediaCache(Path(directory), cache_limit_mb=64)
             checksum = hashlib.sha256(b"expected").hexdigest()
-            item = {"id": "item:0", "checksum": checksum, "url": "https://cms.example.test/uploads/file.mp4"}
+            item = {
+                "id": "item:0",
+                "checksum": checksum,
+                "checksumAlgorithm": "sha256",
+                "url": "https://cms.example.test/uploads/file.mp4",
+            }
 
             with self.assertRaises(ValueError):
                 cache.store_bytes("HDMI-A-1", item, b"actual")
 
             self.assertFalse(cache.path_for("HDMI-A-1", item).exists())
+
+    def test_store_bytes_treats_unlabeled_checksum_as_cache_version_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MediaCache(Path(directory), cache_limit_mb=64)
+            checksum = hashlib.sha256(b"expected").hexdigest()
+            item = {"id": "item:0", "checksum": checksum, "url": "https://cms.example.test/uploads/file.mp4"}
+
+            path = cache.store_bytes("HDMI-A-1", item, b"actual")
+
+            self.assertEqual(path.read_bytes(), b"actual")
+
+    def test_cached_path_finds_legacy_per_output_cache_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MediaCache(Path(directory), cache_limit_mb=64)
+            item = {"id": "item:0", "url": "https://cms.example.test/uploads/file.mp4"}
+            legacy_path = cache.output_dir("HDMI-A-1") / cache_key(item)
+            legacy_path.write_bytes(b"old-cache")
+
+            self.assertEqual(cache.cached_path("HDMI-A-1", item), legacy_path)
 
 
 if __name__ == "__main__":

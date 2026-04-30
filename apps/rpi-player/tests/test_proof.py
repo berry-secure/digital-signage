@@ -79,6 +79,18 @@ class ProofOfPlayTest(unittest.TestCase):
             self.assertEqual([report["eventType"] for report in cms.reports], ["finished", "started"])
             self.assertEqual(spool.pending_count(), 0)
 
+    def test_spool_flush_reports_progress_around_each_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spool = ProofOfPlaySpool(Path(directory), max_pending=10)
+            spool.enqueue({"localId": "a", "eventType": "started"})
+            cms = FakeCms()
+            ticks = []
+
+            sent = spool.flush(cms.post_proof_of_play, progress=lambda: ticks.append("tick"))
+
+            self.assertEqual(sent, 1)
+            self.assertEqual(ticks, ["tick", "tick"])
+
     def test_reporter_spools_when_cms_rejects_report(self):
         with tempfile.TemporaryDirectory() as directory:
             reporter = ProofOfPlayReporter(FakeCms(fail=True), Path(directory), "app")
