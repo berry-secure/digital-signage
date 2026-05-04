@@ -909,6 +909,47 @@ app.post("/api/player/logs", async (req, res) => {
   res.status(201).json({ deviceLog: presentDeviceLog(deviceLog) });
 });
 
+app.post("/api/player/proof-of-play", async (req, res) => {
+  const serial = normalizeSerial(String(req.body?.serial || ""));
+  const secret = String(req.body?.secret || "").trim();
+  const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
+
+  if (!device) {
+    res.status(404).json({ message: "Nie znaleziono urządzenia dla Proof of Play." });
+    return;
+  }
+
+  const status = normalizeProofStatus(req.body?.status || req.body?.eventType);
+  const mediaTitle = String(req.body?.mediaTitle || req.body?.title || "").trim();
+  const mediaId = String(req.body?.mediaId || "").trim();
+  const playbackItemId = String(req.body?.playbackItemId || req.body?.itemId || "").trim();
+  const label = mediaTitle || mediaId || playbackItemId || "media";
+  const context = buildProofOfPlayContext(req.body);
+  const deviceLog = {
+    id: randomUUID(),
+    deviceId: device.id,
+    severity: proofStatusSeverity(status),
+    component: "proof-of-play",
+    message: `${status} ${label}`,
+    stack: "",
+    context,
+    appVersion: String(req.body?.appVersion || device.appVersion || "").trim(),
+    osVersion: String(req.body?.osVersion || "").trim(),
+    networkStatus: String(req.body?.networkStatus || "").trim(),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  database.deviceLogs.unshift(deviceLog);
+  device.lastSeenAt = nowIso();
+  if (status === "started" || status === "finished") {
+    device.lastPlaybackAt = nowIso();
+  }
+  touch(device);
+  await persistDatabase();
+  res.status(201).json({ deviceLog: presentDeviceLog(deviceLog) });
+});
+
 app.post("/api/player/commands/:id/ack", async (req, res) => {
   const serial = normalizeSerial(String(req.body?.serial || ""));
   const secret = String(req.body?.secret || "").trim();
@@ -1547,6 +1588,29 @@ function normalizePlaybackEventTriggerMode(value) {
 function normalizeDeviceLogSeverity(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return deviceLogSeverities.has(normalized) ? normalized : "info";
+}
+
+function normalizeProofStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["started", "finished", "interrupted", "error"].includes(normalized) ? normalized : "started";
+}
+
+function proofStatusSeverity(status) {
+  if (status === "error") {
+    return "error";
+  }
+  if (status === "interrupted") {
+    return "warn";
+  }
+  return "info";
+}
+
+function buildProofOfPlayContext(body) {
+  const source = isPlainObject(body) ? body : {};
+  const context = { ...source };
+  delete context.secret;
+  delete context.deviceSecret;
+  return context;
 }
 
 function buildDeviceCommandPayload(type, payload) {

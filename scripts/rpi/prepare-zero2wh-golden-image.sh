@@ -4,6 +4,7 @@ set -euo pipefail
 ADMIN_USER="${SIGNALDECK_ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${SIGNALDECK_ADMIN_PASSWORD:-Maasck23646}"
 WEBUI_PASSWORD="${SIGNALDECK_WEBUI_PASSWORD:-${ADMIN_PASSWORD}}"
+APP_USER="${SIGNALDECK_USER:-signaldeck}"
 CONFIG_DIR="${SIGNALDECK_CONFIG_DIR:-/etc/signaldeck}"
 STATE_DIR="${SIGNALDECK_STATE_DIR:-/var/lib/signaldeck}"
 BOOT_DIR="${SIGNALDECK_BOOT_DIR:-/boot/firmware}"
@@ -61,7 +62,18 @@ reset_clone_specific_state() {
     "${BOOT_DIR}/SIGNALDECK_HOTSPOT.txt"
 
   rm -rf "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${STATE_DIR}/proof-of-play" "${STATE_DIR}/queue"
-  install -d -m 0755 "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${STATE_DIR}/proof-of-play" "${STATE_DIR}/queue/logs"
+  install -d -o "${APP_USER}" -g "${APP_USER}" -m 0755 \
+    "${STATE_DIR}/cache" \
+    "${STATE_DIR}/cache/media" \
+    "${STATE_DIR}/manifests" \
+    "${STATE_DIR}/proof-of-play" \
+    "${STATE_DIR}/queue" \
+    "${STATE_DIR}/queue/logs"
+  chown -R "${APP_USER}:${APP_USER}" \
+    "${STATE_DIR}/cache" \
+    "${STATE_DIR}/manifests" \
+    "${STATE_DIR}/proof-of-play" \
+    "${STATE_DIR}/queue"
 
   if command -v nmcli >/dev/null 2>&1; then
     nmcli connection delete SignalDeck-Setup >/dev/null 2>&1 || true
