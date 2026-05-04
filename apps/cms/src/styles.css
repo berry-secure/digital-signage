@@ -104,9 +104,27 @@ button:disabled {
   border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.brand-lockup {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.brand-logo {
+  display: block;
+  width: min(100%, 9.8rem);
+  height: auto;
+  padding: 0.36rem 0.42rem;
+  border-radius: 0.5rem;
+  background: #ffffff;
+  box-shadow: 0 0.55rem 1.6rem rgba(15, 10, 79, 0.22);
+}
+
 .sidebar h1 {
-  margin: 0.25rem 0 0;
-  font-size: 1.25rem;
+  margin: 0;
+  color: #eff4ff;
+  font-size: 1.15rem;
+  font-weight: 760;
+  line-height: 1.05;
 }
 
 .sidebar-nav {
