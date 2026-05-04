@@ -136,6 +136,57 @@ describe("MVP API contract", () => {
     assert.equal(calls.filter((entry) => entry === "$transaction").length, 3);
   });
 
+  it("creates a drag-and-drop playlist with uploaded media in one persistence pass", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-playlist-builder-"));
+    const calls: string[] = [];
+    const prisma = createFakePrisma(calls);
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      databaseUrl: "postgresql://signal:deck@localhost:5432/signaldeck",
+      prismaClient: prisma,
+      adminEmail: "playlist-builder-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Playlist Builder Owner"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "playlist-builder-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Builder Client" });
+
+    const transactionsBeforeImport = calls.filter((entry) => entry === "$transaction").length;
+    const imported = await request(isolatedApp)
+      .post("/api/playlists/builder")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .field("clientId", client.body.client.id)
+      .field("channelId", "")
+      .field("name", "Lunch Menu")
+      .field("isActive", "true")
+      .field("notes", "Uploaded from builder")
+      .field(
+        "items",
+        JSON.stringify([
+          { title: "Promo A", kind: "video", durationSeconds: 14, hasAudio: true },
+          { title: "Poster B", kind: "image", durationSeconds: 10, hasAudio: false }
+        ])
+      )
+      .attach("files", Buffer.from("promo fixture"), { filename: "promo-a.mp4", contentType: "video/mp4" })
+      .attach("files", Buffer.from("poster fixture"), { filename: "poster-b.png", contentType: "image/png" });
+
+    assert.equal(imported.status, 201);
+    assert.equal(imported.body.playlist.name, "Lunch Menu");
+    assert.deepEqual(imported.body.playlist.items.map((entry: any) => entry.sortOrder), [10, 20]);
+    assert.deepEqual(imported.body.media.map((entry: any) => entry.title), ["Promo A", "Poster B"]);
+    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 1);
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
+
   it("allows only owners to manage CMS users", async () => {
     const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-rbac-"));
     const isolatedApp = await createApp({

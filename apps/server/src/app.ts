@@ -823,6 +823,123 @@ app.delete("/api/playback-events/:id", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/playlists/builder", requireAuth, upload.array("files"), async (req, res) => {
+  const files = Array.isArray(req.files) ? req.files : [];
+  const cleanupFiles = async () => {
+    await Promise.all(files.map((file) => removeUploadFile(file.filename)));
+  };
+
+  const clientId = String(req.body?.clientId || "").trim();
+  const channelId = String(req.body?.channelId || "").trim();
+  const name = String(req.body?.name || "").trim();
+  const playlistId = String(req.body?.playlistId || "").trim();
+  const client = findById(database.clients, clientId);
+  const channel = channelId ? findById(database.channels, channelId) : null;
+
+  if (!client || !name) {
+    await cleanupFiles();
+    res.status(400).json({ message: "Playlista wymaga poprawnego klienta i nazwy." });
+    return;
+  }
+  if (channelId && (!channel || channel.clientId !== clientId)) {
+    await cleanupFiles();
+    res.status(400).json({ message: "Kanał playlisty musi należeć do wybranego klienta." });
+    return;
+  }
+
+  let playlist = playlistId ? findById(database.playlists, playlistId) : null;
+  if (playlistId && !playlist) {
+    await cleanupFiles();
+    res.status(404).json({ message: "Nie znaleziono playlisty." });
+    return;
+  }
+
+  const itemDefinitions = parsePlaylistBuilderItems(req.body?.items);
+  if (files.length !== itemDefinitions.length || (!playlist && !files.length)) {
+    await cleanupFiles();
+    res.status(400).json({ message: "Liczba plików playlisty nie zgadza się z listą elementów." });
+    return;
+  }
+
+  const createdMedia = [];
+  const createdItems = [];
+  const createdAt = nowIso();
+
+  if (playlist) {
+    playlist.clientId = clientId;
+    playlist.channelId = channelId;
+    playlist.name = name;
+    playlist.isActive = req.body?.isActive !== "false";
+    playlist.notes = String(req.body?.notes || "").trim();
+    touch(playlist);
+  } else {
+    playlist = {
+      id: randomUUID(),
+      clientId,
+      channelId,
+      name,
+      isActive: req.body?.isActive !== "false",
+      notes: String(req.body?.notes || "").trim(),
+      createdAt,
+      updatedAt: createdAt
+    };
+    database.playlists.unshift(playlist);
+  }
+
+  const firstSortOrder = Math.max(
+    0,
+    ...database.playlistItems.filter((entry) => entry.playlistId === playlist.id).map((entry) => Number(entry.sortOrder || 0))
+  ) + 10;
+
+  for (const [index, file] of files.entries()) {
+    const item = itemDefinitions[index];
+    const media = {
+      id: randomUUID(),
+      clientId,
+      title: String(item.title || file.originalname || "Nowe media").trim(),
+      kind: normalizeMediaKind(item.kind),
+      fileName: file.filename,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      durationSeconds: Math.max(Number(item.durationSeconds || 10) || 10, 1),
+      hasAudio: item.hasAudio === true || String(item.hasAudio || "").toLowerCase() === "true",
+      status: "published",
+      tags: "",
+      checksum: await checksumFile(join(uploadsDir, file.filename)),
+      contentVersion: 1,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    const playlistItem = {
+      id: randomUUID(),
+      playlistId: playlist.id,
+      mediaId: media.id,
+      sortOrder: firstSortOrder + index * 10,
+      loopCount: 1,
+      volumePercent: 100,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+
+    database.media.unshift(media);
+    database.playlistItems.push(playlistItem);
+    createdMedia.push(media);
+    createdItems.push(playlistItem);
+  }
+
+  await persistDatabase();
+  const playlistView = buildPlaylistViews(buildUserScope(req.user)).find((entry) => entry.id === playlist.id) || {
+    ...playlist,
+    items: createdItems.map(presentPlaylistItem)
+  };
+
+  res.status(playlistId ? 200 : 201).json({
+    playlist: playlistView,
+    media: createdMedia.map((entry) => enrichMedia(entry, getRequestBaseUrl(req))),
+    playlistItems: createdItems.map(presentPlaylistItem)
+  });
+});
+
 app.post("/api/playlists", requireAuth, async (req, res) => {
   const clientId = String(req.body?.clientId || "").trim();
   const name = String(req.body?.name || "").trim();
@@ -2465,6 +2582,19 @@ function takePendingDeviceCommands(device) {
 
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parsePlaylistBuilderItems(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  try {
+    const parsed = JSON.parse(String(value || "[]"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function buildUserScope(user) {
