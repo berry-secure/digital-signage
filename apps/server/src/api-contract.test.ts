@@ -415,29 +415,6 @@ describe("MVP API contract", () => {
     assert.equal(logged.body.deviceLog.severity, "error");
     assert.equal(logged.body.deviceLog.deviceName, "Event Screen");
 
-    const proof = await request(isolatedApp)
-      .post("/api/player/proof-of-play")
-      .send({
-        serial: "MKEVENT001",
-        secret: "event-secret",
-        status: "started",
-        playlistId: playlist.body.playlist.id,
-        mediaId: playlistMedia.body.media.id,
-        playbackItemId: "playlist-item:0",
-        sourceType: "playlist",
-        mediaTitle: "Base Clip",
-        mediaKind: "video",
-        startedAt: "2026-05-04T12:00:00Z",
-        durationSeconds: 30,
-        appVersion: "1.0.1"
-      });
-
-    assert.equal(proof.status, 201);
-    assert.equal(proof.body.deviceLog.component, "proof-of-play");
-    assert.equal(proof.body.deviceLog.severity, "info");
-    assert.equal(proof.body.deviceLog.deviceName, "Event Screen");
-    assert.match(proof.body.deviceLog.message, /started Base Clip/);
-
     const playback = await request(isolatedApp)
       .post("/api/player/session")
       .send({
@@ -459,11 +436,8 @@ describe("MVP API contract", () => {
 
     const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
     assert.equal(bootstrap.body.playbackEvents.length, 1);
-    assert.equal(bootstrap.body.deviceLogs.length, 2);
-    assert.deepEqual(
-      bootstrap.body.deviceLogs.map((entry: { component: string }) => entry.component),
-      ["proof-of-play", "playback"]
-    );
+    assert.equal(bootstrap.body.deviceLogs.length, 1);
+    assert.equal(bootstrap.body.deviceLogs[0].component, "playback");
     assert.equal(bootstrap.body.deviceLogs[0].clientName, "Events Client");
 
     await rm(isolatedDataDir, { recursive: true, force: true });

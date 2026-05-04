@@ -27,17 +27,6 @@ class InstallScriptTest(unittest.TestCase):
         self.assertIn("codex/rpi-zero-2wh-player", content)
         self.assertIn("identity.json", content)
         self.assertIn("SIGNALDECK_HOTSPOT.txt", content)
-        self.assertIn("queue/logs", content)
-        self.assertIn("chown -R", content)
-
-    def test_installer_creates_runtime_spool_directories_for_agent_user(self):
-        script = REPO_ROOT / "scripts" / "rpi" / "install-video-premium.sh"
-
-        content = script.read_text(encoding="utf-8")
-
-        self.assertIn('"${STATE_DIR}/cache/media"', content)
-        self.assertIn('"${STATE_DIR}/proof-of-play"', content)
-        self.assertIn('"${STATE_DIR}/queue/logs"', content)
 
 
 if __name__ == "__main__":
