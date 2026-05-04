@@ -33,6 +33,7 @@ class PlayerConfig:
     app_version: str = "rpi-video-premium-0.1.0"
     cache_limit_mb: int = 20480
     heartbeat_interval_seconds: int = 15
+    audio_enabled: bool = True
     sync: SyncConfig = field(default_factory=SyncConfig)
     outputs: list[OutputConfig] = field(default_factory=list)
 
@@ -43,6 +44,24 @@ def default_outputs() -> list[OutputConfig]:
 
 def default_config() -> PlayerConfig:
     return PlayerConfig(outputs=default_outputs())
+
+
+def zero2wh_config() -> PlayerConfig:
+    return PlayerConfig(
+        device_model="Raspberry Pi Zero 2 WH",
+        player_type="video_premium",
+        app_version="rpi-zero2wh-0.1.0",
+        cache_limit_mb=40960,
+        audio_enabled=False,
+        sync=SyncConfig(
+            mode="single",
+            group="single-hdmi",
+            policy="best_effort",
+            tolerance_ms=0,
+            group_blackout=False,
+        ),
+        outputs=[OutputConfig("HDMI-A-1", "", True)],
+    )
 
 
 def load_config(path: str | Path) -> PlayerConfig:
@@ -72,6 +91,7 @@ def load_config(path: str | Path) -> PlayerConfig:
         app_version=str(data.get("app_version") or defaults.app_version).strip(),
         cache_limit_mb=_int(data.get("cache_limit_mb"), defaults.cache_limit_mb),
         heartbeat_interval_seconds=_int(data.get("heartbeat_interval_seconds"), defaults.heartbeat_interval_seconds),
+        audio_enabled=_bool(data.get("audio_enabled"), defaults.audio_enabled),
         sync=SyncConfig(
             mode=str(sync_data.get("mode") or defaults.sync.mode).strip(),
             group=str(sync_data.get("group") or defaults.sync.group).strip(),
@@ -85,6 +105,10 @@ def load_config(path: str | Path) -> PlayerConfig:
 
 def default_config_toml() -> str:
     return render_config_toml(default_config())
+
+
+def zero2wh_config_toml() -> str:
+    return render_config_toml(zero2wh_config())
 
 
 def render_config_toml(
@@ -104,6 +128,7 @@ player_type = "{config.player_type}"
 app_version = "{config.app_version}"
 cache_limit_mb = {config.cache_limit_mb}
 heartbeat_interval_seconds = {config.heartbeat_interval_seconds}
+audio_enabled = {"true" if config.audio_enabled else "false"}
 
 [sync]
 mode = "{sync_mode or config.sync.mode}"
@@ -145,3 +170,15 @@ def _int(value: Any, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _bool(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return fallback

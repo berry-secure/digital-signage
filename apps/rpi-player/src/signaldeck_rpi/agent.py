@@ -187,7 +187,7 @@ class AgentRuntime:
                 output,
                 ready_items[0].get("volumePercent") or 100,
                 _first_image_duration(ready_items),
-                audio_enabled=_queue_has_audio(ready_items),
+                audio_enabled=self.config.audio_enabled and _queue_has_audio(ready_items),
             )
             if allow_download:
                 self.cache.write_manifest(output, playable_items)

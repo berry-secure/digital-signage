@@ -313,14 +313,21 @@ class WebUiApp:
     def update_player(self, fields: dict[str, str]) -> str:
         ref = fields.get("ref", "codex/rpi-video-premium-player").strip() or "codex/rpi-video-premium-player"
         quoted_ref = shlex.quote(ref)
+        installer = self._installer_script_name()
         command = (
             "curl -fsSL "
-            f"https://raw.githubusercontent.com/berry-secure/digital-signage/{quoted_ref}/scripts/rpi/install-video-premium.sh "
+            f"https://raw.githubusercontent.com/berry-secure/digital-signage/{quoted_ref}/scripts/rpi/{installer} "
             "-o /tmp/install-signaldeck.sh && "
             f"SIGNALDECK_REF={quoted_ref} bash /tmp/install-signaldeck.sh"
         )
         _run(["bash", "-lc", command])
         return "Update started"
+
+    def _installer_script_name(self) -> str:
+        config = self.provider.config
+        if config.device_model == "Raspberry Pi Zero 2 WH" or config.app_version.startswith("rpi-zero2wh-"):
+            return "install-zero2wh-player.sh"
+        return "install-video-premium.sh"
 
     def force_playlist_update(self) -> str:
         manifests_dir = self.provider.state_root / "manifests"

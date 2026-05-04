@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 from base64 import b64encode
 
-from signaldeck_rpi.config import default_config
+from signaldeck_rpi.config import default_config, zero2wh_config
 from signaldeck_rpi.identity import load_or_create_identity
 from signaldeck_rpi.webui import StatusProvider, WebUiApp, verify_basic_auth
 
@@ -95,6 +95,22 @@ class WebUiTest(unittest.TestCase):
             self.assertEqual(command[:2], ["bash", "-lc"])
             self.assertIn("SIGNALDECK_REF=codex/rpi-video-premium-player", command[2])
             self.assertIn("install-video-premium.sh", command[2])
+
+    def test_webui_update_player_uses_zero2wh_installer_for_zero2wh_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = zero2wh_config()
+            identity = load_or_create_identity(root / "identity.json", "MKZERO2WH123", config.outputs)
+            provider = StatusProvider(config, identity, state_root=root, config_path=root / "player.toml", boot_dir=root / "boot")
+            app = WebUiApp(provider)
+
+            with patch("signaldeck_rpi.webui._run") as run:
+                message = app.update_player({"ref": "codex/rpi-zero-2wh-player"})
+
+            self.assertEqual(message, "Update started")
+            command = run.call_args.args[0]
+            self.assertIn("SIGNALDECK_REF=codex/rpi-zero-2wh-player", command[2])
+            self.assertIn("install-zero2wh-player.sh", command[2])
 
     def test_webui_force_playlist_update_clears_manifests_and_restarts_agent(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -36,6 +36,18 @@ class IdentityTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(identity_path.stat().st_mode), 0o600)
             self.assertEqual(load_or_create_identity(identity_path, "IGNORED", outputs).base_serial, "MK5ABC123")
 
+    def test_load_or_create_identity_supports_single_output_without_suffix(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            identity_path = Path(directory) / "identity.json"
+            outputs = [OutputConfig("HDMI-A-1", "", True)]
+
+            identity = load_or_create_identity(identity_path, "MKZERO2WH123", outputs)
+
+            self.assertEqual(identity.outputs["HDMI-A-1"].serial, "MKZERO2WH123")
+
 
 if __name__ == "__main__":
     unittest.main()

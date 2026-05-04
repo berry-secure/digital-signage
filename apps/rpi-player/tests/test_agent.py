@@ -241,6 +241,17 @@ class AgentRuntimeTest(unittest.TestCase):
 
             self.assertNotIn("--no-audio", playback.played[0][1])
 
+    def test_poll_once_disables_audio_when_config_disables_audio(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            playback = FakePlaybackController()
+            config = replace(default_config(), audio_enabled=False)
+            runtime = self._runtime(root, AudioCmsClient(), FakeMediaCache(root), playback, config=config)
+
+            runtime.poll_once()
+
+            self.assertIn("--no-audio", playback.played[0][1])
+
     def test_poll_once_starts_playback_before_flushing_backlog(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
