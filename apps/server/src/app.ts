@@ -2687,12 +2687,12 @@ async function persistDatabase() {
       throw new Error("DATABASE_URL is configured but Prisma client could not be initialized.");
     }
 
-    persistQueue = persistQueue.then(() => persistPrismaDatabase(prismaClient, database));
+    persistQueue = persistQueue.catch(() => undefined).then(() => persistPrismaDatabase(prismaClient, database));
     await persistQueue;
     return;
   }
 
-  persistQueue = persistQueue.then(() =>
+  persistQueue = persistQueue.catch(() => undefined).then(() =>
     fs.writeFile(databasePath, JSON.stringify(database, null, 2), "utf8")
   );
   await persistQueue;

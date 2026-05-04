@@ -102,6 +102,40 @@ describe("MVP API contract", () => {
     assert.equal(login.body.user.email, "prisma-owner@example.test");
   });
 
+  it("keeps accepting writes after a transient Prisma persistence failure", async () => {
+    const calls: string[] = [];
+    const prisma = createFakePrisma(calls);
+    const prismaApp = await createApp({
+      databaseUrl: "postgresql://signal:deck@localhost:5432/signaldeck",
+      prismaClient: prisma,
+      adminEmail: "prisma-recovery-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Prisma Recovery Owner"
+    });
+
+    const login = await request(prismaApp)
+      .post("/api/auth/login")
+      .send({ email: "prisma-recovery-owner@example.test", password: "strong-password" });
+    const ownerToken = login.body.token;
+
+    prisma.failNextTransaction();
+    const failedCreate = await request(prismaApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Transient Failure Client" });
+
+    assert.equal(failedCreate.status, 500);
+
+    const recoveredCreate = await request(prismaApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Recovered Client" });
+
+    assert.equal(recoveredCreate.status, 201);
+    assert.equal(recoveredCreate.body.client.name, "Recovered Client");
+    assert.equal(calls.filter((entry) => entry === "$transaction").length, 3);
+  });
+
   it("allows only owners to manage CMS users", async () => {
     const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-rbac-"));
     const isolatedApp = await createApp({
@@ -915,6 +949,7 @@ function uploadTestMedia(
 }
 
 function createFakePrisma(calls: string[]) {
+  let transactionsToFail = 0;
   const tables: Record<string, any[]> = {
     user: [],
     client: [],
@@ -980,8 +1015,15 @@ function createFakePrisma(calls: string[]) {
     proofOfPlay: model("proofOfPlay"),
     session: model("session"),
     auditLog: model("auditLog"),
+    failNextTransaction() {
+      transactionsToFail += 1;
+    },
     async $transaction(callback: (tx: unknown) => Promise<void>) {
       calls.push("$transaction");
+      if (transactionsToFail > 0) {
+        transactionsToFail -= 1;
+        throw new Error("transient prisma failure");
+      }
       await callback(this);
     }
   };
