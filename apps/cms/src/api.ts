@@ -351,6 +351,44 @@ export async function updatePlaylist(
   });
 }
 
+export async function savePlaylistBuilder(
+  token: string,
+  payload: {
+    playlistId?: string;
+    clientId: string;
+    channelId: string;
+    name: string;
+    isActive: boolean;
+    notes: string;
+    items: Array<{ title: string; kind: string; durationSeconds: number; hasAudio: boolean }>;
+    files: File[];
+  }
+) {
+  const formData = new FormData();
+  if (payload.playlistId) {
+    formData.append("playlistId", payload.playlistId);
+  }
+  formData.append("clientId", payload.clientId);
+  formData.append("channelId", payload.channelId);
+  formData.append("name", payload.name);
+  formData.append("isActive", String(payload.isActive));
+  formData.append("notes", payload.notes);
+  formData.append("items", JSON.stringify(payload.items));
+  for (const file of payload.files) {
+    formData.append("files", file);
+  }
+
+  return requestJson<{
+    playlist: BootstrapPayload["playlists"][number];
+    media: BootstrapPayload["media"];
+    playlistItems: unknown[];
+  }>("/api/playlists/builder", {
+    method: "POST",
+    token,
+    body: formData
+  });
+}
+
 export async function deletePlaylist(token: string, playlistId: string) {
   return requestJson<{ ok: true }>(`/api/playlists/${playlistId}`, {
     method: "DELETE",

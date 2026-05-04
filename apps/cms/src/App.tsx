@@ -10,8 +10,6 @@ import {
   createMusicChannel,
   createMusicPlaylist,
   createMusicTrack,
-  createPlaylist,
-  createPlaylistItem,
   createPlaybackEvent,
   createSchedule,
   createUser,
@@ -36,13 +34,13 @@ import {
   login,
   logout,
   resetDevice,
+  savePlaylistBuilder,
   storeToken,
   updateChannel,
   updateClient,
   updateDevice,
   updateLocation,
   updatePlaybackEvent,
-  updatePlaylist,
   updateSchedule,
   updateUser,
   uploadMedia
@@ -65,7 +63,6 @@ import {
   buildPlaylistDraftItem,
   detectMediaKind,
   getDefaultDurationSeconds,
-  playlistSortOrder,
   reorderPlaylistDraftItems,
   type PlaylistDraftItem
 } from "./playlistBuilder";
@@ -836,45 +833,24 @@ function App() {
     }
 
     const draftItems = [...playlistBuilderItems];
-    const existingPlaylist = playlistForm.id ? playlists.find((playlist) => playlist.id === playlistForm.id) : null;
-    const firstSortOrder = playlistForm.id
-      ? Math.max(0, ...(existingPlaylist?.items || []).map((item) => item.sortOrder)) + 10
-      : 10;
 
     void runMutation(
       async () => {
-        const payload = {
+        await savePlaylistBuilder(token, {
+          playlistId: playlistForm.id || undefined,
           clientId: playlistForm.clientId,
           channelId: playlistForm.channelId,
           name: playlistForm.name.trim(),
           isActive: playlistForm.isActive,
-          notes: playlistForm.notes
-        };
-        const playlistResponse = playlistForm.id
-          ? await updatePlaylist(token, playlistForm.id, payload)
-          : await createPlaylist(token, payload);
-        const playlistId = playlistResponse.playlist.id;
-
-        for (const [index, item] of draftItems.entries()) {
-          const mediaPayload = new FormData();
-          mediaPayload.append("clientId", playlistForm.clientId);
-          mediaPayload.append("title", item.title);
-          mediaPayload.append("kind", item.kind);
-          mediaPayload.append("durationSeconds", String(item.durationSeconds));
-          mediaPayload.append("hasAudio", String(item.hasAudio));
-          mediaPayload.append("status", "published");
-          mediaPayload.append("tags", "");
-          mediaPayload.append("file", item.file);
-          const uploaded = await uploadMedia(token, mediaPayload);
-
-          await createPlaylistItem(token, playlistId, {
-            mediaId: uploaded.media.id,
-            sortOrder: playlistForm.id ? firstSortOrder + index * 10 : playlistSortOrder(index),
-            loopCount: 1,
-            volumePercent: 100,
-            locationIds: []
-          });
-        }
+          notes: playlistForm.notes,
+          items: draftItems.map((item) => ({
+            title: item.title,
+            kind: item.kind,
+            durationSeconds: item.durationSeconds,
+            hasAudio: item.hasAudio
+          })),
+          files: draftItems.map((item) => item.file)
+        });
       },
       playlistForm.id ? "Zapisano playlistę i dodano nowe pliki." : "Zapisano playlistę.",
       () => {
@@ -2827,7 +2803,7 @@ function App() {
                       Wyczyść
                     </button>
                     <button className="primary-button" type="submit" disabled={submitting}>
-                      Zapisz
+                      {submitting ? "Zapisywanie..." : "Zapisz"}
                     </button>
                   </div>
                 </div>
