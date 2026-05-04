@@ -1061,9 +1061,9 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div>
-          <span className="eyebrow">Berry Secure</span>
-          <h1>Signage CMS</h1>
+        <div className="brand-lockup">
+          <img className="brand-logo" src="/brand/maasck-logo.png" alt="maasck" />
+          <h1>MAASCK Signage CMS</h1>
         </div>
 
         <nav className="sidebar-nav" aria-label="Sekcje CMS">
