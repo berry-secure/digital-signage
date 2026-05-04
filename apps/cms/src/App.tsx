@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type DragEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   addMusicPlaylistTrack,
@@ -61,6 +61,14 @@ import {
   summarizeProofOfPlay,
   type ProofOfPlayFilters
 } from "./proofOfPlay";
+import {
+  buildPlaylistDraftItem,
+  detectMediaKind,
+  getDefaultDurationSeconds,
+  playlistSortOrder,
+  reorderPlaylistDraftItems,
+  type PlaylistDraftItem
+} from "./playlistBuilder";
 import type {
   BootstrapPayload,
   ChannelRecord,
@@ -226,6 +234,10 @@ type PlaylistItemFormState = {
   loopCount: string;
   volumePercent: string;
   locationIds: string[];
+};
+
+type PlaylistBuilderItem = PlaylistDraftItem & {
+  file: File;
 };
 
 type ScheduleFormState = {
@@ -533,6 +545,10 @@ function App() {
   const [musicChannelForm, setMusicChannelForm] = useState<MusicChannelFormState>(emptyMusicChannelForm);
   const [playlistForm, setPlaylistForm] = useState<PlaylistFormState>(emptyPlaylistForm);
   const [playlistItemForm, setPlaylistItemForm] = useState<PlaylistItemFormState>(emptyPlaylistItemForm);
+  const [playlistBuilderItems, setPlaylistBuilderItems] = useState<PlaylistBuilderItem[]>([]);
+  const [selectedPlaylistBuilderItemId, setSelectedPlaylistBuilderItemId] = useState("");
+  const [draggedPlaylistBuilderItemId, setDraggedPlaylistBuilderItemId] = useState("");
+  const playlistBuilderItemsRef = useRef<PlaylistBuilderItem[]>([]);
   const [playbackEventForm, setPlaybackEventForm] = useState<PlaybackEventFormState>(emptyPlaybackEventForm);
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormState>(emptyScheduleForm);
   const [deviceForm, setDeviceForm] = useState<DeviceFormState>(emptyDeviceForm);
@@ -711,6 +727,17 @@ function App() {
   }, [token]);
 
   useEffect(() => {
+    playlistBuilderItemsRef.current = playlistBuilderItems;
+  }, [playlistBuilderItems]);
+
+  useEffect(
+    () => () => {
+      revokePlaylistBuilderItems(playlistBuilderItemsRef.current);
+    },
+    []
+  );
+
+  useEffect(() => {
     if (!flash) {
       return;
     }
@@ -794,6 +821,149 @@ function App() {
     setDashboard(emptyBootstrap);
   }
 
+  async function handlePlaylistBuilderSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+    if (!playlistForm.clientId || !playlistForm.name.trim()) {
+      setFlash({ kind: "error", text: "Wybierz klienta i wpisz nazwę playlisty." });
+      return;
+    }
+    if (!playlistForm.id && !playlistBuilderItems.length) {
+      setFlash({ kind: "error", text: "Wrzuć przynajmniej jeden plik do playlisty." });
+      return;
+    }
+
+    const draftItems = [...playlistBuilderItems];
+    const existingPlaylist = playlistForm.id ? playlists.find((playlist) => playlist.id === playlistForm.id) : null;
+    const firstSortOrder = playlistForm.id
+      ? Math.max(0, ...(existingPlaylist?.items || []).map((item) => item.sortOrder)) + 10
+      : 10;
+
+    void runMutation(
+      async () => {
+        const payload = {
+          clientId: playlistForm.clientId,
+          channelId: playlistForm.channelId,
+          name: playlistForm.name.trim(),
+          isActive: playlistForm.isActive,
+          notes: playlistForm.notes
+        };
+        const playlistResponse = playlistForm.id
+          ? await updatePlaylist(token, playlistForm.id, payload)
+          : await createPlaylist(token, payload);
+        const playlistId = playlistResponse.playlist.id;
+
+        for (const [index, item] of draftItems.entries()) {
+          const mediaPayload = new FormData();
+          mediaPayload.append("clientId", playlistForm.clientId);
+          mediaPayload.append("title", item.title);
+          mediaPayload.append("kind", item.kind);
+          mediaPayload.append("durationSeconds", String(item.durationSeconds));
+          mediaPayload.append("hasAudio", String(item.hasAudio));
+          mediaPayload.append("status", "published");
+          mediaPayload.append("tags", "");
+          mediaPayload.append("file", item.file);
+          const uploaded = await uploadMedia(token, mediaPayload);
+
+          await createPlaylistItem(token, playlistId, {
+            mediaId: uploaded.media.id,
+            sortOrder: playlistForm.id ? firstSortOrder + index * 10 : playlistSortOrder(index),
+            loopCount: 1,
+            volumePercent: 100,
+            locationIds: []
+          });
+        }
+      },
+      playlistForm.id ? "Zapisano playlistę i dodano nowe pliki." : "Zapisano playlistę.",
+      () => {
+        setPlaylistForm(emptyPlaylistForm);
+        resetPlaylistBuilderItems();
+      }
+    );
+  }
+
+  async function handlePlaylistBuilderFiles(files: FileList | File[]) {
+    const nextFiles = Array.from(files);
+    if (!nextFiles.length) {
+      return;
+    }
+
+    const acceptedItems: PlaylistBuilderItem[] = [];
+    const rejectedNames: string[] = [];
+
+    for (const file of nextFiles) {
+      const kind = detectMediaKind(file);
+      if (!kind) {
+        rejectedNames.push(file.name);
+        continue;
+      }
+
+      const previewUrl = URL.createObjectURL(file);
+      const durationSeconds = await readPlaylistFileDuration(file, kind, previewUrl);
+      const draftItem = buildPlaylistDraftItem({
+        id: createPlaylistDraftId(),
+        file,
+        durationSeconds,
+        previewUrl
+      });
+
+      if (!draftItem) {
+        URL.revokeObjectURL(previewUrl);
+        rejectedNames.push(file.name);
+        continue;
+      }
+
+      acceptedItems.push({ ...draftItem, file });
+    }
+
+    if (acceptedItems.length) {
+      setPlaylistBuilderItems((current) => [...current, ...acceptedItems]);
+      setSelectedPlaylistBuilderItemId((current) => current || acceptedItems[0].id);
+    }
+    if (rejectedNames.length) {
+      setFlash({ kind: "error", text: `Pominięto nieobsługiwane pliki: ${rejectedNames.join(", ")}` });
+    }
+  }
+
+  function handlePlaylistDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    void handlePlaylistBuilderFiles(event.dataTransfer.files);
+  }
+
+  function handlePlaylistFileInput(event: ChangeEvent<HTMLInputElement>) {
+    if (event.target.files) {
+      void handlePlaylistBuilderFiles(event.target.files);
+    }
+    event.target.value = "";
+  }
+
+  function removeSelectedPlaylistBuilderItem() {
+    if (!selectedPlaylistBuilderItemId) {
+      return;
+    }
+
+    setPlaylistBuilderItems((current) => {
+      const removed = current.find((entry) => entry.id === selectedPlaylistBuilderItemId);
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      const nextItems = current.filter((entry) => entry.id !== selectedPlaylistBuilderItemId);
+      setSelectedPlaylistBuilderItemId(nextItems[0]?.id || "");
+      return nextItems;
+    });
+  }
+
+  function resetPlaylistBuilderItems() {
+    setPlaylistBuilderItems((current) => {
+      revokePlaylistBuilderItems(current);
+      return [];
+    });
+    setSelectedPlaylistBuilderItemId("");
+    setDraggedPlaylistBuilderItemId("");
+  }
+
   function beginUserEdit(user: UserRecord) {
     setUserForm({
       id: user.id,
@@ -846,6 +1016,7 @@ function App() {
   }
 
   function beginPlaylistEdit(playlist: PlaylistRecord) {
+    resetPlaylistBuilderItems();
     setPlaylistForm({
       id: playlist.id,
       clientId: playlist.clientId,
@@ -2492,241 +2663,174 @@ function App() {
 
         {activeSection === "playlists" ? (
           <section className="section-stack">
-            <div className="card-grid two-columns">
+            <div className="card-grid">
               <form
-                className="panel stack-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void runMutation(
-                    async () => {
-                      if (!token) {
-                        return;
-                      }
-                      const payload = {
-                        clientId: playlistForm.clientId,
-                        channelId: playlistForm.channelId,
-                        name: playlistForm.name,
-                        isActive: playlistForm.isActive,
-                        notes: playlistForm.notes
-                      };
-                      if (playlistForm.id) {
-                        await updatePlaylist(token, playlistForm.id, payload);
-                      } else {
-                        await createPlaylist(token, payload);
-                      }
-                    },
-                    playlistForm.id ? "Zapisano playlistę." : "Dodano playlistę.",
-                    () => setPlaylistForm(emptyPlaylistForm)
-                  );
-                }}
+                className="panel stack-form playlist-builder-panel"
+                onSubmit={handlePlaylistBuilderSubmit}
               >
                 <header className="panel-header">
-                  <h3>{playlistForm.id ? "Edytuj playlistę" : "Nowa playlista"}</h3>
+                  <div>
+                    <h3>{playlistForm.id ? "Edytuj playlistę" : "Kreator playlisty"}</h3>
+                    <span>
+                      {playlistForm.id
+                        ? "zmień dane i dopisz nowe pliki przeciąganiem"
+                        : "wrzuć pliki z komputera i zapisz gotową kolejkę"}
+                    </span>
+                  </div>
                   {playlistForm.id ? (
-                    <button className="ghost-button" type="button" onClick={() => setPlaylistForm(emptyPlaylistForm)}>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => {
+                        setPlaylistForm(emptyPlaylistForm);
+                        resetPlaylistBuilderItems();
+                      }}
+                    >
                       Anuluj
                     </button>
                   ) : null}
                 </header>
-                <Field label="Klient" htmlFor="playlist-client">
-                  <select
-                    id="playlist-client"
-                    name="playlist-client"
-                    value={playlistForm.clientId}
-                    onChange={(event) =>
-                      setPlaylistForm((current) => ({
-                        ...current,
-                        clientId: event.target.value,
-                        channelId: ""
-                      }))
-                    }
-                    required
-                  >
-                    <option value="">Wybierz klienta</option>
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {client.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Kanał" htmlFor="playlist-channel">
-                  <select
-                    id="playlist-channel"
-                    name="playlist-channel"
-                    value={playlistForm.channelId}
-                    onChange={(event) => setPlaylistForm((current) => ({ ...current, channelId: event.target.value }))}
-                  >
-                    <option value="">Kanał opcjonalny</option>
-                    {filteredChannelsForPlaylist.map((channel) => (
-                      <option key={channel.id} value={channel.id}>
-                        {channel.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Nazwa playlisty" htmlFor="playlist-name">
-                  <input
-                    id="playlist-name"
-                    name="playlist-name"
-                    value={playlistForm.name}
-                    onChange={(event) => setPlaylistForm((current) => ({ ...current, name: event.target.value }))}
-                    required
-                  />
-                </Field>
+                <div className="inline-grid triple">
+                  <Field label="Klient" htmlFor="playlist-client">
+                    <select
+                      id="playlist-client"
+                      name="playlist-client"
+                      value={playlistForm.clientId}
+                      onChange={(event) =>
+                        setPlaylistForm((current) => ({
+                          ...current,
+                          clientId: event.target.value,
+                          channelId: ""
+                        }))
+                      }
+                      required
+                    >
+                      <option value="">Wybierz klienta</option>
+                      {clients.map((client) => (
+                        <option key={client.id} value={client.id}>
+                          {client.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Kanał" htmlFor="playlist-channel">
+                    <select
+                      id="playlist-channel"
+                      name="playlist-channel"
+                      value={playlistForm.channelId}
+                      onChange={(event) => setPlaylistForm((current) => ({ ...current, channelId: event.target.value }))}
+                    >
+                      <option value="">Kanał opcjonalny</option>
+                      {filteredChannelsForPlaylist.map((channel) => (
+                        <option key={channel.id} value={channel.id}>
+                          {channel.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Nazwa playlisty" htmlFor="playlist-name">
+                    <input
+                      id="playlist-name"
+                      name="playlist-name"
+                      value={playlistForm.name}
+                      onChange={(event) => setPlaylistForm((current) => ({ ...current, name: event.target.value }))}
+                      required
+                    />
+                  </Field>
+                </div>
                 <Field label="Notatki" htmlFor="playlist-notes">
                   <textarea
                     id="playlist-notes"
                     name="playlist-notes"
-                    rows={4}
+                    rows={2}
                     value={playlistForm.notes}
                     onChange={(event) => setPlaylistForm((current) => ({ ...current, notes: event.target.value }))}
                   />
                 </Field>
-                <label className="checkbox-row" htmlFor="playlist-active">
+                <div
+                  className="playlist-dropzone"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={handlePlaylistDrop}
+                >
                   <input
-                    id="playlist-active"
-                    name="playlist-active"
-                    type="checkbox"
-                    checked={playlistForm.isActive}
-                    onChange={(event) => setPlaylistForm((current) => ({ ...current, isActive: event.target.checked }))}
+                    id="playlist-builder-files"
+                    name="playlist-builder-files"
+                    type="file"
+                    accept="video/*,image/*,audio/*"
+                    multiple
+                    onChange={handlePlaylistFileInput}
                   />
-                  <span>Playlista aktywna</span>
-                </label>
-                <button className="primary-button" type="submit" disabled={submitting}>
-                  {playlistForm.id ? "Zapisz playlistę" : "Dodaj playlistę"}
-                </button>
-              </form>
-
-              <form
-                className="panel stack-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!token) {
-                    return;
-                  }
-                  void runMutation(
-                    async () => {
-                      await createPlaylistItem(token, playlistItemForm.playlistId, {
-                        mediaId: playlistItemForm.mediaId,
-                        sortOrder: Number(playlistItemForm.sortOrder || 10),
-                        loopCount: Number(playlistItemForm.loopCount || 1),
-                        volumePercent: Number(playlistItemForm.volumePercent || 100),
-                        locationIds: playlistItemForm.locationIds
-                      });
-                    },
-                    "Dodano materiał do playlisty.",
-                    () => setPlaylistItemForm(emptyPlaylistItemForm)
-                  );
-                }}
-              >
-                <header className="panel-header">
-                  <h3>Dodaj element do playlisty</h3>
-                  <span>bezpośrednio z biblioteki</span>
-                </header>
-                <Field label="Playlista" htmlFor="playlist-item-playlist">
-                  <select
-                    id="playlist-item-playlist"
-                    name="playlist-item-playlist"
-                    value={playlistItemForm.playlistId}
-                    onChange={(event) =>
-                      setPlaylistItemForm((current) => ({
-                        ...current,
-                        playlistId: event.target.value,
-                        mediaId: "",
-                        locationIds: []
-                      }))
-                    }
-                    required
-                  >
-                    <option value="">Wybierz playlistę</option>
-                    {playlists.map((playlist) => (
-                      <option key={playlist.id} value={playlist.id}>
-                        {playlist.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Media" htmlFor="playlist-item-media">
-                  <select
-                    id="playlist-item-media"
-                    name="playlist-item-media"
-                    value={playlistItemForm.mediaId}
-                    onChange={(event) => setPlaylistItemForm((current) => ({ ...current, mediaId: event.target.value }))}
-                    required
-                  >
-                    <option value="">Wybierz media</option>
-                    {mediaForPlaylistItem.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.title}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Site’y elementu" htmlFor="playlist-item-locations">
-                  <div id="playlist-item-locations" className="checkbox-grid">
-                    <label className="checkbox-row compact">
-                      <input
-                        type="checkbox"
-                        checked={!playlistItemForm.locationIds.length}
-                        onChange={() => setPlaylistItemForm((current) => ({ ...current, locationIds: [] }))}
-                      />
-                      <span>Wszystkie lokalizacje</span>
-                    </label>
-                    {locationsForPlaylistItem.map((location) => (
-                      <label key={location.id} className="checkbox-row compact">
-                        <input
-                          type="checkbox"
-                          checked={playlistItemForm.locationIds.includes(location.id)}
-                          onChange={() =>
-                            setPlaylistItemForm((current) => ({
-                              ...current,
-                              locationIds: toggleValue(current.locationIds, location.id)
-                            }))
-                          }
-                        />
-                        <span>{location.name}</span>
-                      </label>
+                  <label htmlFor="playlist-builder-files">
+                    <strong>Przeciągnij media tutaj</strong>
+                    <span>wideo i audio dostają czas z pliku, obrazy 10 sekund</span>
+                  </label>
+                </div>
+                {playlistBuilderItems.length ? (
+                  <div className="playlist-draft-list">
+                    {playlistBuilderItems.map((item, index) => (
+                      <button
+                        key={item.id}
+                        className={`playlist-draft-row ${selectedPlaylistBuilderItemId === item.id ? "selected" : ""}`}
+                        type="button"
+                        draggable
+                        onClick={() => setSelectedPlaylistBuilderItemId(item.id)}
+                        onDragStart={() => setDraggedPlaylistBuilderItemId(item.id)}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          setPlaylistBuilderItems((current) =>
+                            reorderPlaylistDraftItems(current, draggedPlaylistBuilderItemId, item.id)
+                          );
+                          setDraggedPlaylistBuilderItemId("");
+                        }}
+                        onDragEnd={() => setDraggedPlaylistBuilderItemId("")}
+                      >
+                        <span className="playlist-draft-position">{index + 1}</span>
+                        <span className="playlist-draft-thumb">
+                          {item.kind === "image" ? <img src={item.previewUrl} alt="" /> : null}
+                          {item.kind === "video" ? <video src={item.previewUrl} muted preload="metadata" /> : null}
+                          {item.kind === "audio" ? <span className="playlist-draft-audio">AUDIO</span> : null}
+                        </span>
+                        <span className="playlist-draft-copy">
+                          <strong>{item.title}</strong>
+                          <small>
+                            {item.kind} · {formatDuration(item.durationSeconds)} · pozycja {index + 1}
+                          </small>
+                        </span>
+                      </button>
                     ))}
                   </div>
-                </Field>
-                <div className="inline-grid triple">
-                  <Field label="Sort" htmlFor="playlist-item-sort">
+                ) : (
+                  <EmptyState text="Wrzuć pliki z komputera, żeby zbudować kolejność playlisty." />
+                )}
+                <div className="playlist-builder-actions">
+                  <label className="checkbox-row" htmlFor="playlist-active">
                     <input
-                      id="playlist-item-sort"
-                      name="playlist-item-sort"
-                      type="number"
-                      value={playlistItemForm.sortOrder}
-                      onChange={(event) => setPlaylistItemForm((current) => ({ ...current, sortOrder: event.target.value }))}
+                      id="playlist-active"
+                      name="playlist-active"
+                      type="checkbox"
+                      checked={playlistForm.isActive}
+                      onChange={(event) => setPlaylistForm((current) => ({ ...current, isActive: event.target.checked }))}
                     />
-                  </Field>
-                  <Field label="Loop" htmlFor="playlist-item-loop">
-                    <input
-                      id="playlist-item-loop"
-                      name="playlist-item-loop"
-                      type="number"
-                      min="1"
-                      value={playlistItemForm.loopCount}
-                      onChange={(event) => setPlaylistItemForm((current) => ({ ...current, loopCount: event.target.value }))}
-                    />
-                  </Field>
-                  <Field label="Głośność" htmlFor="playlist-item-volume">
-                    <input
-                      id="playlist-item-volume"
-                      name="playlist-item-volume"
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={playlistItemForm.volumePercent}
-                      onChange={(event) =>
-                        setPlaylistItemForm((current) => ({ ...current, volumePercent: event.target.value }))
-                      }
-                    />
-                  </Field>
+                    <span>Playlista aktywna</span>
+                  </label>
+                  <div className="card-actions">
+                    <button
+                      className="danger-button"
+                      type="button"
+                      disabled={!selectedPlaylistBuilderItemId}
+                      onClick={removeSelectedPlaylistBuilderItem}
+                    >
+                      Usuń plik
+                    </button>
+                    <button className="ghost-button" type="button" onClick={resetPlaylistBuilderItems}>
+                      Wyczyść
+                    </button>
+                    <button className="primary-button" type="submit" disabled={submitting}>
+                      Zapisz
+                    </button>
+                  </div>
                 </div>
-                <button className="primary-button" type="submit" disabled={submitting}>
-                  Dodaj element
-                </button>
               </form>
             </div>
 
@@ -2770,12 +2874,12 @@ function App() {
                       </div>
                       {playlist.items.length ? (
                         <div className="playlist-items">
-                          {playlist.items.map((item) => (
+                          {playlist.items.map((item, index) => (
                             <div key={item.id} className="playlist-item-row">
                               <div>
                                 <strong>{item.media?.title || mediaLookup.get(item.mediaId)?.title || "Brak media"}</strong>
                                 <span>
-                                  sort {item.sortOrder} · loop {item.loopCount} · vol {item.volumePercent} ·{" "}
+                                  pozycja {index + 1} · loop {item.loopCount} · vol {item.volumePercent} ·{" "}
                                   {item.locationIds.length
                                     ? item.locationIds.map((id) => locationLookup.get(id)?.name).filter(Boolean).join(", ")
                                     : "wszystkie site’y"}
@@ -4423,6 +4527,61 @@ function formatDateTime(value: string) {
     dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function formatDuration(seconds: number) {
+  const safeSeconds = Math.max(Math.round(Number(seconds) || 0), 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const rest = safeSeconds % 60;
+  if (!minutes) {
+    return `${rest}s`;
+  }
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function createPlaylistDraftId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function readPlaylistFileDuration(file: File, kind: MediaKind, previewUrl: string) {
+  if (kind === "image") {
+    return Promise.resolve(getDefaultDurationSeconds(kind));
+  }
+
+  return new Promise<number>((resolve) => {
+    const mediaElement = document.createElement(kind === "audio" ? "audio" : "video");
+    let settled = false;
+    const finish = (duration?: number) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      mediaElement.removeAttribute("src");
+      mediaElement.load();
+      const normalized = Math.round(Number(duration || 0));
+      resolve(Number.isFinite(normalized) && normalized > 0 ? normalized : getDefaultDurationSeconds(kind));
+    };
+
+    mediaElement.preload = "metadata";
+    mediaElement.onloadedmetadata = () => finish(mediaElement.duration);
+    mediaElement.onerror = () => finish();
+    window.setTimeout(() => finish(), 3000);
+    mediaElement.src = previewUrl;
+
+    if (!file.size) {
+      finish();
+    }
+  });
+}
+
+function revokePlaylistBuilderItems(items: PlaylistBuilderItem[]) {
+  for (const item of items) {
+    if (item.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl);
+    }
+  }
 }
 
 function connectionLabel(value: ReturnType<typeof getDeviceConnection>) {
