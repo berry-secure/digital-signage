@@ -855,15 +855,23 @@ app.post("/api/playlists/builder", requireAuth, upload.array("files"), async (re
   }
 
   const itemDefinitions = parsePlaylistBuilderItems(req.body?.items);
-  if (files.length !== itemDefinitions.length || (!playlist && !files.length)) {
+  if (!playlist && !itemDefinitions.length) {
     await cleanupFiles();
-    res.status(400).json({ message: "Liczba plików playlisty nie zgadza się z listą elementów." });
+    res.status(400).json({ message: "Wrzuć przynajmniej jeden plik do nowej playlisty." });
     return;
   }
 
   const createdMedia = [];
-  const createdItems = [];
+  const nextPlaylistItems = [];
+  const nextPlaylistItemLocations = [];
+  const uploadedFileIndexes = new Set();
+  const currentPlaylistItems: any[] = playlist ? database.playlistItems.filter((entry) => entry.playlistId === playlist.id) : [];
+  const currentPlaylistItemsById = new Map<string, any>(currentPlaylistItems.map((entry) => [entry.id, entry] as const));
+  const currentLocationIdsByItemId = new Map<string, string[]>(
+    currentPlaylistItems.map((entry) => [entry.id, getPlaylistItemLocationIds(entry.id)] as const)
+  );
   const createdAt = nowIso();
+  let fallbackFileIndex = 0;
 
   if (playlist) {
     playlist.clientId = clientId;
@@ -886,13 +894,59 @@ app.post("/api/playlists/builder", requireAuth, upload.array("files"), async (re
     database.playlists.unshift(playlist);
   }
 
-  const firstSortOrder = Math.max(
-    0,
-    ...database.playlistItems.filter((entry) => entry.playlistId === playlist.id).map((entry) => Number(entry.sortOrder || 0))
-  ) + 10;
+  for (const [index, item] of itemDefinitions.entries()) {
+    const mediaId = String(item.mediaId || item.existingMediaId || "").trim();
+    const existingItemId = String(item.existingItemId || "").trim();
+    const hasExplicitFileIndex = item.fileIndex !== undefined && item.fileIndex !== null && item.fileIndex !== "";
+    const explicitFileIndex = hasExplicitFileIndex ? Number(item.fileIndex) : NaN;
+    const existingItem = existingItemId ? currentPlaylistItemsById.get(existingItemId) : null;
+    const timestamp = nowIso();
 
-  for (const [index, file] of files.entries()) {
-    const item = itemDefinitions[index];
+    if (mediaId && !hasExplicitFileIndex) {
+      const media = findById(database.media, mediaId);
+      if (!media || media.clientId !== clientId) {
+        await cleanupFiles();
+        res.status(400).json({ message: "Element playlisty wskazuje media spoza wybranego klienta." });
+        return;
+      }
+
+      const playlistItem = {
+        id: existingItem?.id || randomUUID(),
+        playlistId: playlist.id,
+        mediaId: media.id,
+        sortOrder: (index + 1) * 10,
+        loopCount: Math.max(Number(existingItem?.loopCount || item.loopCount || 1) || 1, 1),
+        volumePercent: clampNumber(Number(existingItem?.volumePercent || item.volumePercent || 100), 0, 100),
+        createdAt: existingItem?.createdAt || timestamp,
+        updatedAt: timestamp
+      };
+
+      nextPlaylistItems.push(playlistItem);
+      const locationIds = existingItem ? currentLocationIdsByItemId.get(existingItem.id) || [] : [];
+      nextPlaylistItemLocations.push(
+        ...locationIds.map((locationId) => ({
+          id: randomUUID(),
+          playlistItemId: playlistItem.id,
+          locationId,
+          createdAt: timestamp
+        }))
+      );
+      continue;
+    }
+
+    const fileIndex = hasExplicitFileIndex ? explicitFileIndex : fallbackFileIndex;
+    if (!Number.isInteger(fileIndex) || fileIndex < 0 || fileIndex >= files.length || uploadedFileIndexes.has(fileIndex)) {
+      await cleanupFiles();
+      res.status(400).json({ message: "Liczba plików playlisty nie zgadza się z listą elementów." });
+      return;
+    }
+
+    uploadedFileIndexes.add(fileIndex);
+    if (!hasExplicitFileIndex) {
+      fallbackFileIndex += 1;
+    }
+
+    const file = files[fileIndex];
     const media = {
       id: randomUUID(),
       clientId,
@@ -914,29 +968,43 @@ app.post("/api/playlists/builder", requireAuth, upload.array("files"), async (re
       id: randomUUID(),
       playlistId: playlist.id,
       mediaId: media.id,
-      sortOrder: firstSortOrder + index * 10,
-      loopCount: 1,
-      volumePercent: 100,
-      createdAt: nowIso(),
-      updatedAt: nowIso()
+      sortOrder: (index + 1) * 10,
+      loopCount: Math.max(Number(item.loopCount || 1) || 1, 1),
+      volumePercent: clampNumber(Number(item.volumePercent || 100), 0, 100),
+      createdAt: timestamp,
+      updatedAt: timestamp
     };
 
     database.media.unshift(media);
-    database.playlistItems.push(playlistItem);
     createdMedia.push(media);
-    createdItems.push(playlistItem);
+    nextPlaylistItems.push(playlistItem);
   }
+
+  if (uploadedFileIndexes.size !== files.length) {
+    await cleanupFiles();
+    res.status(400).json({ message: "Liczba plików playlisty nie zgadza się z listą elementów." });
+    return;
+  }
+
+  if (currentPlaylistItems.length) {
+    const currentItemIds = new Set(currentPlaylistItems.map((entry) => entry.id));
+    database.playlistItems = database.playlistItems.filter((entry) => entry.playlistId !== playlist.id);
+    database.playlistItemLocations = database.playlistItemLocations.filter((entry) => !currentItemIds.has(entry.playlistItemId));
+  }
+
+  database.playlistItems.push(...nextPlaylistItems);
+  database.playlistItemLocations.push(...nextPlaylistItemLocations);
 
   await persistDatabase();
   const playlistView = buildPlaylistViews(buildUserScope(req.user)).find((entry) => entry.id === playlist.id) || {
     ...playlist,
-    items: createdItems.map(presentPlaylistItem)
+    items: nextPlaylistItems.map(presentPlaylistItem)
   };
 
   res.status(playlistId ? 200 : 201).json({
     playlist: playlistView,
     media: createdMedia.map((entry) => enrichMedia(entry, getRequestBaseUrl(req))),
-    playlistItems: createdItems.map(presentPlaylistItem)
+    playlistItems: nextPlaylistItems.map(presentPlaylistItem)
   });
 });
 

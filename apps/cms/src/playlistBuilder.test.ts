@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildPlaylistDraftItem,
+  buildPlaylistDraftItemFromMedia,
   detectMediaKind,
   getDefaultDurationSeconds,
   playlistSortOrder,
@@ -21,6 +22,29 @@ describe("playlist builder helpers", () => {
     assert.equal(buildPlaylistDraftItem({ id: "image", file: file("poster.jpg", "image/jpeg") })?.durationSeconds, 10);
     assert.equal(buildPlaylistDraftItem({ id: "audio", file: file("track.mp3", "audio/mpeg") })?.durationSeconds, 180);
     assert.equal(getDefaultDurationSeconds("video"), 10);
+  });
+
+  it("builds editable draft rows from existing playlist media", () => {
+    assert.deepEqual(
+      buildPlaylistDraftItemFromMedia({
+        id: "existing-item",
+        title: "Menu Board",
+        kind: "image",
+        mimeType: "image/png",
+        durationSeconds: 0,
+        hasAudio: true,
+        previewUrl: "https://cms.example.test/uploads/menu.png"
+      }),
+      {
+        id: "existing-item",
+        title: "Menu Board",
+        kind: "image",
+        mimeType: "image/png",
+        durationSeconds: 10,
+        hasAudio: false,
+        previewUrl: "https://cms.example.test/uploads/menu.png"
+      }
+    );
   });
 
   it("reorders draft items and keeps playlist sort numbers spaced by ten", () => {

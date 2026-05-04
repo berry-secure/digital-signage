@@ -61,6 +61,7 @@ import {
 } from "./proofOfPlay";
 import {
   buildPlaylistDraftItem,
+  buildPlaylistDraftItemFromMedia,
   detectMediaKind,
   getDefaultDurationSeconds,
   reorderPlaylistDraftItems,
@@ -234,7 +235,9 @@ type PlaylistItemFormState = {
 };
 
 type PlaylistBuilderItem = PlaylistDraftItem & {
-  file: File;
+  file: File | null;
+  existingItemId?: string;
+  existingMediaId?: string;
 };
 
 type ScheduleFormState = {
@@ -559,6 +562,7 @@ function App() {
   const [proofReportTotal, setProofReportTotal] = useState(0);
   const [proofReportLoading, setProofReportLoading] = useState(false);
   const [deviceCommandDrafts, setDeviceCommandDrafts] = useState<Record<string, DeviceCommandType>>({});
+  const tokenRef = useRef(token);
 
   const clients = dashboard.clients;
   const locations = dashboard.locations || [];
@@ -716,6 +720,7 @@ function App() {
   const filteredLocationsForDirectory = clientDirectory.locations;
 
   useEffect(() => {
+    tokenRef.current = token;
     if (!token) {
       setLoading(false);
       return;
@@ -752,6 +757,9 @@ function App() {
       const payload = await fetchBootstrap(nextToken);
       setDashboard(payload);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401 && nextToken !== tokenRef.current) {
+        return;
+      }
       handleError(error);
     } finally {
       setLoading(false);
@@ -761,6 +769,7 @@ function App() {
   function handleError(error: unknown) {
     if (error instanceof ApiError && error.status === 401) {
       clearToken();
+      tokenRef.current = "";
       setToken("");
       setDashboard(emptyBootstrap);
       setFlash({ kind: "error", text: "Sesja wygasła. Zaloguj się ponownie." });
@@ -794,6 +803,7 @@ function App() {
     setSubmitting(true);
     try {
       const response = await login(loginForm.email, loginForm.password);
+      tokenRef.current = response.token;
       storeToken(response.token);
       setToken(response.token);
       setFlash({ kind: "success", text: "Zalogowano do nowego CMS." });
@@ -814,6 +824,7 @@ function App() {
     }
 
     clearToken();
+    tokenRef.current = "";
     setToken("");
     setDashboard(emptyBootstrap);
   }
@@ -833,6 +844,27 @@ function App() {
     }
 
     const draftItems = [...playlistBuilderItems];
+    const files: File[] = [];
+    const builderItems = draftItems.map((item) => {
+      const payload = {
+        title: item.title,
+        kind: item.kind,
+        durationSeconds: item.durationSeconds,
+        hasAudio: item.hasAudio,
+        existingItemId: item.existingItemId,
+        mediaId: item.existingMediaId,
+        fileIndex: undefined as number | undefined
+      };
+
+      if (item.file) {
+        payload.fileIndex = files.length;
+        payload.existingItemId = undefined;
+        payload.mediaId = undefined;
+        files.push(item.file);
+      }
+
+      return payload;
+    });
 
     void runMutation(
       async () => {
@@ -843,16 +875,11 @@ function App() {
           name: playlistForm.name.trim(),
           isActive: playlistForm.isActive,
           notes: playlistForm.notes,
-          items: draftItems.map((item) => ({
-            title: item.title,
-            kind: item.kind,
-            durationSeconds: item.durationSeconds,
-            hasAudio: item.hasAudio
-          })),
-          files: draftItems.map((item) => item.file)
+          items: builderItems,
+          files
         });
       },
-      playlistForm.id ? "Zapisano playlistę i dodano nowe pliki." : "Zapisano playlistę.",
+      "Zapisano playlistę.",
       () => {
         setPlaylistForm(emptyPlaylistForm);
         resetPlaylistBuilderItems();
@@ -922,7 +949,7 @@ function App() {
 
     setPlaylistBuilderItems((current) => {
       const removed = current.find((entry) => entry.id === selectedPlaylistBuilderItemId);
-      if (removed?.previewUrl) {
+      if (removed?.previewUrl?.startsWith("blob:")) {
         URL.revokeObjectURL(removed.previewUrl);
       }
       const nextItems = current.filter((entry) => entry.id !== selectedPlaylistBuilderItemId);
@@ -992,7 +1019,39 @@ function App() {
   }
 
   function beginPlaylistEdit(playlist: PlaylistRecord) {
-    resetPlaylistBuilderItems();
+    const draftItems = playlist.items
+      .map((item) => {
+        const itemMedia = mediaLookup.get(item.mediaId) || item.media;
+        if (!itemMedia) {
+          return null;
+        }
+
+        const previewUrl = itemMedia.url || (itemMedia.fileName ? `${getApiBaseUrl()}/uploads/${itemMedia.fileName}` : "");
+        const draftItem = buildPlaylistDraftItemFromMedia({
+          id: `existing-${item.id}`,
+          title: itemMedia.title,
+          kind: itemMedia.kind,
+          mimeType: itemMedia.mimeType,
+          durationSeconds: itemMedia.durationSeconds,
+          hasAudio: itemMedia.hasAudio,
+          previewUrl
+        });
+
+        return {
+          ...draftItem,
+          file: null,
+          existingItemId: item.id,
+          existingMediaId: itemMedia.id
+        };
+      })
+      .filter(Boolean) as PlaylistBuilderItem[];
+
+    setPlaylistBuilderItems((current) => {
+      revokePlaylistBuilderItems(current);
+      return draftItems;
+    });
+    setSelectedPlaylistBuilderItemId(draftItems[0]?.id || "");
+    setDraggedPlaylistBuilderItemId("");
     setPlaylistForm({
       id: playlist.id,
       clientId: playlist.clientId,
@@ -4554,7 +4613,7 @@ function readPlaylistFileDuration(file: File, kind: MediaKind, previewUrl: strin
 
 function revokePlaylistBuilderItems(items: PlaylistBuilderItem[]) {
   for (const item of items) {
-    if (item.previewUrl) {
+    if (item.previewUrl?.startsWith("blob:")) {
       URL.revokeObjectURL(item.previewUrl);
     }
   }

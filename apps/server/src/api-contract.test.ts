@@ -184,6 +184,38 @@ describe("MVP API contract", () => {
     assert.deepEqual(imported.body.media.map((entry: any) => entry.title), ["Promo A", "Poster B"]);
     assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 1);
 
+    const edited = await request(isolatedApp)
+      .post("/api/playlists/builder")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .field("playlistId", imported.body.playlist.id)
+      .field("clientId", client.body.client.id)
+      .field("channelId", "")
+      .field("name", "Lunch Menu Updated")
+      .field("isActive", "true")
+      .field("notes", "Edited from builder")
+      .field(
+        "items",
+        JSON.stringify([
+          {
+            existingItemId: imported.body.playlist.items[1].id,
+            mediaId: imported.body.media[1].id,
+            title: "Poster B",
+            kind: "image",
+            durationSeconds: 10,
+            hasAudio: false
+          }
+        ])
+      );
+
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.playlist.name, "Lunch Menu Updated");
+    assert.deepEqual(
+      edited.body.playlist.items.map((entry: any) => entry.mediaId),
+      [imported.body.media[1].id]
+    );
+    assert.deepEqual(edited.body.playlist.items.map((entry: any) => entry.sortOrder), [10]);
+    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 2);
+
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
 
