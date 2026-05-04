@@ -28,6 +28,29 @@ class InstallScriptTest(unittest.TestCase):
         self.assertIn("identity.json", content)
         self.assertIn("SIGNALDECK_HOTSPOT.txt", content)
 
+    def test_installer_keeps_state_root_writable_for_agent_identity(self):
+        script = REPO_ROOT / "scripts" / "rpi" / "install-video-premium.sh"
+
+        content = script.read_text(encoding="utf-8")
+
+        self.assertIn('install -d -o "${APP_USER}" -g "${APP_USER}" -m 0755', content)
+        self.assertIn('"${STATE_DIR}"', content)
+        self.assertIn('"${STATE_DIR}/cache/media"', content)
+        self.assertIn('"${STATE_DIR}/proof-of-play"', content)
+        self.assertIn('"${STATE_DIR}/queue/logs"', content)
+
+    def test_golden_image_reset_keeps_state_root_writable_for_agent_identity(self):
+        for relative_path in [
+            "scripts/rpi/prepare-golden-image.sh",
+            "scripts/rpi/prepare-zero2wh-golden-image.sh",
+        ]:
+            script = REPO_ROOT / relative_path
+            content = script.read_text(encoding="utf-8")
+
+            self.assertIn('APP_USER="${SIGNALDECK_USER:-signaldeck}"', content)
+            self.assertIn('"${STATE_DIR}"', content)
+            self.assertIn('chown -R "${APP_USER}:${APP_USER}"', content)
+
 
 if __name__ == "__main__":
     unittest.main()

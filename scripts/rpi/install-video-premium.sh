@@ -68,8 +68,17 @@ ensure_user() {
   fi
   usermod -aG video,render,input "${APP_USER}" 2>/dev/null || true
 
-  install -d -m 0755 "${INSTALL_DIR}" "${CONFIG_DIR}" "${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
-  install -d -o "${APP_USER}" -g "${APP_USER}" -m 0755 "${STATE_DIR}/cache" "${STATE_DIR}/manifests" "${LOG_DIR}"
+  install -d -m 0755 "${INSTALL_DIR}" "${CONFIG_DIR}" "${LOG_DIR}"
+  install -d -o "${APP_USER}" -g "${APP_USER}" -m 0755 \
+    "${STATE_DIR}" \
+    "${BACKUP_DIR}" \
+    "${STATE_DIR}/cache" \
+    "${STATE_DIR}/cache/media" \
+    "${STATE_DIR}/manifests" \
+    "${STATE_DIR}/proof-of-play" \
+    "${STATE_DIR}/queue" \
+    "${STATE_DIR}/queue/logs" \
+    "${LOG_DIR}"
 }
 
 install_application() {
