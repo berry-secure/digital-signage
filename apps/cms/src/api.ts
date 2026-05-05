@@ -360,7 +360,15 @@ export async function savePlaylistBuilder(
     name: string;
     isActive: boolean;
     notes: string;
-    items: Array<{ title: string; kind: string; durationSeconds: number; hasAudio: boolean }>;
+    items: Array<{
+      title: string;
+      kind: string;
+      durationSeconds: number;
+      hasAudio: boolean;
+      fileIndex?: number;
+      mediaId?: string;
+      existingItemId?: string;
+    }>;
     files: File[];
   }
 ) {

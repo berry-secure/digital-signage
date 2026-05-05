@@ -66,6 +66,31 @@ export function buildPlaylistDraftItem(input: {
   };
 }
 
+export function buildPlaylistDraftItemFromMedia(input: {
+  id: string;
+  title: string;
+  kind: MediaKind;
+  mimeType: string;
+  durationSeconds: number;
+  hasAudio: boolean;
+  previewUrl: string;
+}): PlaylistDraftItem {
+  const durationSeconds = Math.max(
+    Math.round(Number(input.durationSeconds || getDefaultDurationSeconds(input.kind))) || getDefaultDurationSeconds(input.kind),
+    1
+  );
+
+  return {
+    id: input.id,
+    title: input.title.trim() || "Media",
+    kind: input.kind,
+    mimeType: input.mimeType || mimeTypeForKind(input.kind),
+    durationSeconds,
+    hasAudio: input.kind === "image" ? false : Boolean(input.hasAudio),
+    previewUrl: input.previewUrl || ""
+  };
+}
+
 export function reorderPlaylistDraftItems<T extends { id: string }>(items: T[], activeId: string, overId: string) {
   if (!activeId || !overId || activeId === overId) {
     return items;
