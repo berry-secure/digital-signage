@@ -332,7 +332,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       clientId: entry.clientId,
       allLocations: entry.allLocations !== false,
       createdAt: toDate(entry.createdAt)
-    }));
+    }))
+    .filter(uniqueBy((entry) => `${entry.userId}:${entry.clientId}`));
   const userClientPairs = new Set(userClients.map((entry) => `${entry.userId}:${entry.clientId}`));
 
   const userLocationAccesses = ((database as any).userLocationAccesses || [])
@@ -344,7 +345,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       clientId: entry.clientId,
       locationId: entry.locationId,
       createdAt: toDate(entry.createdAt)
-    }));
+    }))
+    .filter(uniqueBy((entry) => `${entry.userId}:${entry.locationId}`));
 
   const channels = database.channels
     .filter((entry) => clientIds.has(entry.clientId))
@@ -367,7 +369,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       channelId: entry.channelId,
       locationId: entry.locationId,
       createdAt: toDate(entry.createdAt)
-    }));
+    }))
+    .filter(uniqueBy((entry) => `${entry.channelId}:${entry.locationId}`));
 
   const media = database.media
     .filter((entry) => clientIds.has(entry.clientId))
@@ -456,7 +459,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       musicChannelId: entry.musicChannelId,
       locationId: entry.locationId,
       createdAt: toDate(entry.createdAt)
-    }));
+    }))
+    .filter(uniqueBy((entry) => `${entry.musicChannelId}:${entry.locationId}`));
 
   const playlists = database.playlists
     .filter((entry) => clientIds.has(entry.clientId))
@@ -493,7 +497,8 @@ export function buildPrismaCreateBatches(database: DatabaseShape) {
       playlistItemId: entry.playlistItemId,
       locationId: entry.locationId,
       createdAt: toDate(entry.createdAt)
-    }));
+    }))
+    .filter(uniqueBy((entry) => `${entry.playlistItemId}:${entry.locationId}`));
 
   const schedules = database.schedules
     .filter(
@@ -654,6 +659,18 @@ async function createMany(model: any, data: any[]) {
   }
 
   await model.createMany({ data });
+}
+
+function uniqueBy(getKey: (entry: any) => string) {
+  const seen = new Set<string>();
+  return (entry: any) => {
+    const key = getKey(entry);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  };
 }
 
 function withIsoDates(entry: any) {
