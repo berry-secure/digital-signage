@@ -296,7 +296,61 @@ describe("MVP API contract", () => {
       [imported.body.media[1].id]
     );
     assert.deepEqual(edited.body.playlist.items.map((entry: any) => entry.sortOrder), [10]);
-    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 4);
+    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 2);
+    assert.equal(calls.filter((entry) => entry === "playlist.update").length, 2);
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
+
+  it("updates playlist status without rewriting the whole Prisma snapshot", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-playlist-toggle-"));
+    const calls: string[] = [];
+    const prisma = createFakePrisma(calls);
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      databaseUrl: "postgresql://signal:deck@localhost:5432/signaldeck",
+      prismaClient: prisma,
+      adminEmail: "playlist-toggle-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Playlist Toggle Owner"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "playlist-toggle-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const client = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Toggle Client" });
+
+    const playlist = await request(isolatedApp)
+      .post("/api/playlists")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: "",
+        name: "Toggle Playlist",
+        isActive: true,
+        notes: ""
+      });
+
+    prisma.failNextTransaction();
+    const toggled = await request(isolatedApp)
+      .put(`/api/playlists/${playlist.body.playlist.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: "",
+        name: "Toggle Playlist",
+        isActive: false,
+        notes: ""
+      });
+
+    assert.equal(toggled.status, 200);
+    assert.equal(toggled.body.playlist.isActive, false);
+    assert.ok(calls.includes("playlist.update"));
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
@@ -1264,6 +1318,15 @@ function createFakePrisma(calls: string[]) {
     async createMany({ data }: { data: any[] }) {
       calls.push(`${name}.createMany`);
       tables[name].push(...data);
+    },
+    async update({ where, data }: { where: { id: string }; data: Record<string, unknown> }) {
+      calls.push(`${name}.update`);
+      const index = tables[name].findIndex((entry) => entry.id === where.id);
+      if (index < 0) {
+        throw new Error(`${name} not found`);
+      }
+      tables[name][index] = { ...tables[name][index], ...data };
+      return tables[name][index];
     }
   });
 

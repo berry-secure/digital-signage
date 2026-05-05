@@ -1077,7 +1077,7 @@ app.put("/api/playlists/:id", requireAuth, async (req, res) => {
     req.body?.isActive === undefined ? playlist.isActive : req.body.isActive !== false && req.body.isActive !== "false";
   playlist.notes = req.body?.notes === undefined ? playlist.notes : String(req.body.notes || "").trim();
   touch(playlist);
-  await persistDatabase();
+  await persistPlaylistMetadata(playlist);
   res.json({ playlist });
 });
 
@@ -2982,6 +2982,32 @@ async function persistDatabase() {
     fs.writeFile(databasePath, JSON.stringify(database, null, 2), "utf8")
   );
   await persistQueue;
+}
+
+async function persistPlaylistMetadata(playlist) {
+  if (storageMode === "prisma") {
+    if (!prismaClient) {
+      throw new Error("DATABASE_URL is configured but Prisma client could not be initialized.");
+    }
+
+    persistQueue = persistQueue.catch(() => undefined).then(() =>
+      prismaClient.playlist.update({
+        where: { id: playlist.id },
+        data: {
+          clientId: playlist.clientId,
+          channelId: playlist.channelId || null,
+          name: playlist.name,
+          isActive: playlist.isActive !== false,
+          notes: playlist.notes || "",
+          updatedAt: new Date(playlist.updatedAt || nowIso())
+        }
+      })
+    );
+    await persistQueue;
+    return;
+  }
+
+  await persistDatabase();
 }
 
 async function ensureDirectories() {
