@@ -236,6 +236,7 @@ describe("MVP API contract", () => {
     assert.equal(imported.body.playlist.name, "Lunch Menu");
     assert.deepEqual(imported.body.playlist.items.map((entry: any) => entry.sortOrder), [10, 20]);
     assert.deepEqual(imported.body.media.map((entry: any) => entry.title), ["Promo A", "Poster B"]);
+    assert.match(imported.body.playlist.items[0].media.url, /\/uploads\/.+\.mp4$/);
     assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 1);
 
     const paused = await request(isolatedApp)
@@ -266,6 +267,27 @@ describe("MVP API contract", () => {
     assert.equal(active.status, 200);
     assert.equal(active.body.playlist.isActive, true);
 
+    await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        serial: "MKBUILDER001",
+        secret: "builder-secret",
+        platform: "android",
+        appVersion: "1.0.1",
+        deviceModel: "Android TV",
+        playerState: "idle"
+      });
+    await request(isolatedApp)
+      .post("/api/player/logs")
+      .send({
+        serial: "MKBUILDER001",
+        secret: "builder-secret",
+        severity: "info",
+        component: "playlist-builder-test",
+        message: "Existing player log should not affect playlist edits"
+      });
+    prisma.failNextCreateMany("deviceLog");
+
     const edited = await request(isolatedApp)
       .post("/api/playlists/builder")
       .set("Authorization", `Bearer ${ownerToken}`)
@@ -295,9 +317,13 @@ describe("MVP API contract", () => {
       edited.body.playlist.items.map((entry: any) => entry.mediaId),
       [imported.body.media[1].id]
     );
+    assert.match(edited.body.playlist.items[0].media.url, /\/uploads\/.+\.png$/);
     assert.deepEqual(edited.body.playlist.items.map((entry: any) => entry.sortOrder), [10]);
-    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 2);
-    assert.equal(calls.filter((entry) => entry === "playlist.update").length, 2);
+    assert.equal(calls.filter((entry) => entry === "playlist.update").length, 3);
+
+    const bootstrap = await request(isolatedApp).get("/api/bootstrap").set("Authorization", `Bearer ${ownerToken}`);
+    const editedPlaylist = bootstrap.body.playlists.find((entry: any) => entry.id === imported.body.playlist.id);
+    assert.match(editedPlaylist.items[0].media.url, /\/uploads\/.+\.png$/);
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
@@ -1305,6 +1331,7 @@ function createFakePrisma(calls: string[]) {
     proofOfPlay: [],
     location: []
   };
+  const createManyFailures = new Set<string>();
 
   const model = (name: string) => ({
     async findMany() {
@@ -1317,6 +1344,10 @@ function createFakePrisma(calls: string[]) {
     },
     async createMany({ data }: { data: any[] }) {
       calls.push(`${name}.createMany`);
+      if (createManyFailures.has(name)) {
+        createManyFailures.delete(name);
+        throw new Error(`${name}.createMany failed`);
+      }
       tables[name].push(...data);
     },
     async update({ where, data }: { where: { id: string }; data: Record<string, unknown> }) {
@@ -1357,6 +1388,9 @@ function createFakePrisma(calls: string[]) {
     auditLog: model("auditLog"),
     failNextTransaction() {
       transactionsToFail += 1;
+    },
+    failNextCreateMany(name: string) {
+      createManyFailures.add(name);
     },
     async $transaction(callback: (tx: unknown) => Promise<void>) {
       calls.push("$transaction");

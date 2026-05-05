@@ -1013,16 +1013,24 @@ app.post("/api/playlists/builder", requireAuth, upload.array("files"), async (re
   database.playlistItems.push(...nextPlaylistItems);
   database.playlistItemLocations.push(...nextPlaylistItemLocations);
 
-  await persistDatabase();
-  const playlistView = buildPlaylistViews(buildUserScope(req.user)).find((entry) => entry.id === playlist.id) || {
+  await persistPlaylistBuilderResult({
+    playlist,
+    isNewPlaylist: !playlistId,
+    createdMedia,
+    playlistItems: nextPlaylistItems,
+    playlistItemLocations: nextPlaylistItemLocations,
+    replacedPlaylistItemIds: currentPlaylistItems.map((entry) => entry.id)
+  });
+  const baseUrl = getRequestBaseUrl(req);
+  const playlistView = buildPlaylistViews(buildUserScope(req.user), baseUrl).find((entry) => entry.id === playlist.id) || {
     ...playlist,
-    items: nextPlaylistItems.map(presentPlaylistItem)
+    items: nextPlaylistItems.map((entry) => presentPlaylistItem(entry, baseUrl))
   };
 
   res.status(playlistId ? 200 : 201).json({
     playlist: playlistView,
-    media: createdMedia.map((entry) => enrichMedia(entry, getRequestBaseUrl(req))),
-    playlistItems: nextPlaylistItems.map(presentPlaylistItem)
+    media: createdMedia.map((entry) => enrichMedia(entry, baseUrl)),
+    playlistItems: nextPlaylistItems.map((entry) => presentPlaylistItem(entry, baseUrl))
   });
 });
 
@@ -1727,7 +1735,7 @@ function buildBootstrapPayload(req) {
       .filter((entry) => scope.canSeeClient(entry.clientId) && scope.canSeeTargetedRecord(entry.clientId, getMusicChannelLocationIds(entry.id)))
       .sort(sortByName)
       .map(presentMusicChannel),
-    playlists: buildPlaylistViews(scope),
+    playlists: buildPlaylistViews(scope, baseUrl),
     schedules: [...database.schedules]
       .filter((entry) => scope.canSeeClient(entry.clientId))
       .sort(sortByPriorityDesc),
@@ -1943,7 +1951,7 @@ function shouldInsertPlaybackEvent(event, playedItems, elapsedSeconds, nextMinut
   return true;
 }
 
-function buildPlaylistViews(scope = null) {
+function buildPlaylistViews(scope = null, baseUrl = "") {
   return [...database.playlists]
     .filter((playlist) => !scope || scope.canSeeClient(playlist.clientId))
     .sort(sortByName)
@@ -1953,15 +1961,16 @@ function buildPlaylistViews(scope = null) {
         .filter((entry) => entry.playlistId === playlist.id)
         .filter((entry) => !scope || scope.canSeeTargetedRecord(playlist.clientId, getPlaylistItemLocationIds(entry.id)))
         .sort((left, right) => left.sortOrder - right.sortOrder)
-        .map(presentPlaylistItem)
+        .map((entry) => presentPlaylistItem(entry, baseUrl))
     }));
 }
 
-function presentPlaylistItem(entry) {
+function presentPlaylistItem(entry, baseUrl = "") {
+  const media = findById(database.media, entry.mediaId);
   return {
     ...entry,
     locationIds: getPlaylistItemLocationIds(entry.id),
-    media: findById(database.media, entry.mediaId) || null
+    media: media ? enrichMedia(media, baseUrl) : null
   };
 }
 
@@ -3008,6 +3017,119 @@ async function persistPlaylistMetadata(playlist) {
   }
 
   await persistDatabase();
+}
+
+async function persistPlaylistBuilderResult(result) {
+  if (storageMode === "prisma") {
+    if (!prismaClient) {
+      throw new Error("DATABASE_URL is configured but Prisma client could not be initialized.");
+    }
+
+    persistQueue = persistQueue.catch(() => undefined).then(() =>
+      prismaClient.$transaction(async (tx) => {
+        if (result.isNewPlaylist) {
+          await createPrismaRows(tx.playlist, [toPrismaPlaylist(result.playlist)]);
+        } else {
+          await tx.playlist.update({
+            where: { id: result.playlist.id },
+            data: toPrismaPlaylistUpdate(result.playlist)
+          });
+        }
+
+        if (result.replacedPlaylistItemIds.length) {
+          await tx.playlistItemLocation.deleteMany({
+            where: { playlistItemId: { in: result.replacedPlaylistItemIds } }
+          });
+          await tx.playlistItem.deleteMany({
+            where: { playlistId: result.playlist.id }
+          });
+        }
+
+        await createPrismaRows(tx.media, result.createdMedia.map(toPrismaMedia));
+        await createPrismaRows(tx.playlistItem, result.playlistItems.map(toPrismaPlaylistItem));
+        await createPrismaRows(tx.playlistItemLocation, result.playlistItemLocations.map(toPrismaPlaylistItemLocation));
+      })
+    );
+    await persistQueue;
+    return;
+  }
+
+  await persistDatabase();
+}
+
+async function createPrismaRows(model, data) {
+  if (!data.length) {
+    return;
+  }
+
+  await model.createMany({ data, skipDuplicates: true });
+}
+
+function toPrismaPlaylist(playlist) {
+  return {
+    id: playlist.id,
+    clientId: playlist.clientId,
+    channelId: playlist.channelId || null,
+    name: playlist.name,
+    isActive: playlist.isActive !== false,
+    notes: playlist.notes || "",
+    createdAt: toPersistDate(playlist.createdAt),
+    updatedAt: toPersistDate(playlist.updatedAt)
+  };
+}
+
+function toPrismaPlaylistUpdate(playlist) {
+  const data = toPrismaPlaylist(playlist);
+  delete data.id;
+  delete data.createdAt;
+  return data;
+}
+
+function toPrismaMedia(media) {
+  return {
+    id: media.id,
+    clientId: media.clientId,
+    title: media.title,
+    kind: media.kind,
+    fileName: media.fileName,
+    originalName: media.originalName || media.fileName,
+    mimeType: media.mimeType || "application/octet-stream",
+    durationSeconds: Number(media.durationSeconds || 10) || 10,
+    hasAudio: Boolean(media.hasAudio),
+    status: media.status === "draft" ? "draft" : "published",
+    tags: media.tags || "",
+    checksum: media.checksum || "",
+    contentVersion: Number(media.contentVersion || 1) || 1,
+    createdAt: toPersistDate(media.createdAt),
+    updatedAt: toPersistDate(media.updatedAt)
+  };
+}
+
+function toPrismaPlaylistItem(item) {
+  return {
+    id: item.id,
+    playlistId: item.playlistId,
+    mediaId: item.mediaId,
+    sortOrder: Number(item.sortOrder || 10) || 10,
+    loopCount: Number(item.loopCount || 1) || 1,
+    volumePercent: clampNumber(Number(item.volumePercent || 100), 0, 100),
+    createdAt: toPersistDate(item.createdAt),
+    updatedAt: toPersistDate(item.updatedAt)
+  };
+}
+
+function toPrismaPlaylistItemLocation(location) {
+  return {
+    id: location.id,
+    playlistItemId: location.playlistItemId,
+    locationId: location.locationId,
+    createdAt: toPersistDate(location.createdAt)
+  };
+}
+
+function toPersistDate(value) {
+  const date = value instanceof Date ? value : new Date(value || nowIso());
+  return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
 async function ensureDirectories() {
