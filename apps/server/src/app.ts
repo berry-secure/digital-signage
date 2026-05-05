@@ -248,13 +248,31 @@ app.post("/api/users", requireAuth, async (req, res) => {
 });
 
 app.put("/api/users/:id", requireAuth, async (req, res) => {
-  if (!requireUserManagementPermission(req, res)) {
-    return;
-  }
-
   const user = findById(database.users, req.params.id);
   if (!user) {
     res.status(404).json({ message: "Nie znaleziono użytkownika." });
+    return;
+  }
+
+  if (req.user?.role !== "owner") {
+    const nextPassword = String(req.body?.password || "");
+    if (!canPasswordManageUser(req.user, user)) {
+      res.status(403).json({ message: "Brak uprawnień do zmiany hasła tego użytkownika." });
+      return;
+    }
+    if (hasNonPasswordUserChanges(req.body, user)) {
+      res.status(403).json({ message: "Możesz zmienić tylko hasło użytkownika." });
+      return;
+    }
+    if (!nextPassword || nextPassword.length < 8) {
+      res.status(400).json({ message: "Nowe hasło musi mieć co najmniej 8 znaków." });
+      return;
+    }
+
+    user.passwordHash = hashPassword(nextPassword);
+    touch(user);
+    await persistDatabase();
+    res.json({ user: sanitizeUser(user) });
     return;
   }
 
@@ -1039,11 +1057,25 @@ app.put("/api/playlists/:id", requireAuth, async (req, res) => {
     return;
   }
 
-  playlist.clientId = String(req.body?.clientId || playlist.clientId).trim() || playlist.clientId;
-  playlist.channelId = String(req.body?.channelId || playlist.channelId).trim();
+  const nextClientId = String(req.body?.clientId || playlist.clientId).trim() || playlist.clientId;
+  const nextChannelId = String(req.body?.channelId || "").trim();
+  const client = findById(database.clients, nextClientId);
+  const channel = nextChannelId ? findById(database.channels, nextChannelId) : null;
+  if (!client) {
+    res.status(400).json({ message: "Playlista wymaga poprawnego klienta." });
+    return;
+  }
+  if (nextChannelId && (!channel || channel.clientId !== nextClientId)) {
+    res.status(400).json({ message: "Kanał playlisty musi należeć do wybranego klienta." });
+    return;
+  }
+
+  playlist.clientId = nextClientId;
+  playlist.channelId = nextChannelId;
   playlist.name = String(req.body?.name || playlist.name).trim() || playlist.name;
-  playlist.isActive = req.body?.isActive !== false;
-  playlist.notes = String(req.body?.notes || playlist.notes).trim();
+  playlist.isActive =
+    req.body?.isActive === undefined ? playlist.isActive : req.body.isActive !== false && req.body.isActive !== "false";
+  playlist.notes = req.body?.notes === undefined ? playlist.notes : String(req.body.notes || "").trim();
   touch(playlist);
   await persistDatabase();
   res.json({ playlist });
@@ -1605,12 +1637,61 @@ function requireOwnerPermission(req, res) {
   return false;
 }
 
+function getUserClientIds(userId) {
+  return database.userClients.filter((entry) => entry.userId === userId).map((entry) => entry.clientId);
+}
+
+function usersShareAnyClient(leftUserId, rightUserId) {
+  const leftClientIds = new Set(getUserClientIds(leftUserId));
+  return getUserClientIds(rightUserId).some((clientId) => leftClientIds.has(clientId));
+}
+
+function getVisibleUsers(actor) {
+  if (actor?.role === "owner") {
+    return [...database.users];
+  }
+  if (actor?.role === "manager") {
+    return database.users.filter((user) => user.id === actor.id || usersShareAnyClient(actor.id, user.id));
+  }
+  return database.users.filter((user) => user.id === actor?.id);
+}
+
+function canPasswordManageUser(actor, targetUser) {
+  if (!actor || !targetUser) {
+    return false;
+  }
+  if (actor.role === "owner") {
+    return true;
+  }
+  if (actor.id === targetUser.id) {
+    return true;
+  }
+  return actor.role === "manager" && targetUser.role !== "owner" && usersShareAnyClient(actor.id, targetUser.id);
+}
+
+function hasNonPasswordUserChanges(body, user) {
+  const email = String(body?.email || user.email)
+    .trim()
+    .toLowerCase();
+  const name = String(body?.name || user.name).trim() || user.name;
+  const role = String(body?.role || user.role).trim() || user.role;
+
+  return (
+    email !== user.email ||
+    name !== user.name ||
+    role !== user.role ||
+    body?.clientIds !== undefined ||
+    body?.locationIds !== undefined ||
+    body?.allLocations !== undefined
+  );
+}
+
 function buildBootstrapPayload(req) {
   const baseUrl = getRequestBaseUrl(req);
   const scope = buildUserScope(req.user);
   return {
     user: sanitizeUser(req.user),
-    users: [...database.users].sort((left, right) =>
+    users: getVisibleUsers(req.user).sort((left, right) =>
       String(left.name || "").localeCompare(String(right.name || ""), "pl", {
         sensitivity: "base",
         numeric: true

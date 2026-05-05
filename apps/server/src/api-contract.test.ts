@@ -184,6 +184,34 @@ describe("MVP API contract", () => {
     assert.deepEqual(imported.body.media.map((entry: any) => entry.title), ["Promo A", "Poster B"]);
     assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 1);
 
+    const paused = await request(isolatedApp)
+      .put(`/api/playlists/${imported.body.playlist.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: "",
+        name: "Lunch Menu",
+        isActive: false,
+        notes: "Uploaded from builder"
+      });
+
+    assert.equal(paused.status, 200);
+    assert.equal(paused.body.playlist.isActive, false);
+
+    const active = await request(isolatedApp)
+      .put(`/api/playlists/${imported.body.playlist.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        clientId: client.body.client.id,
+        channelId: "",
+        name: "Lunch Menu",
+        isActive: true,
+        notes: "Uploaded from builder"
+      });
+
+    assert.equal(active.status, 200);
+    assert.equal(active.body.playlist.isActive, true);
+
     const edited = await request(isolatedApp)
       .post("/api/playlists/builder")
       .set("Authorization", `Bearer ${ownerToken}`)
@@ -214,7 +242,7 @@ describe("MVP API contract", () => {
       [imported.body.media[1].id]
     );
     assert.deepEqual(edited.body.playlist.items.map((entry: any) => entry.sortOrder), [10]);
-    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 2);
+    assert.equal(calls.filter((entry) => entry === "$transaction").length, transactionsBeforeImport + 4);
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
@@ -262,6 +290,118 @@ describe("MVP API contract", () => {
 
     assert.equal(forbidden.status, 403);
     assert.equal(forbidden.body.message, "Brak uprawnień do zarządzania użytkownikami.");
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
+
+  it("scopes CMS users and allows password-only updates by role", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-user-scope-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "scope-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "Scope Owner"
+    });
+
+    const ownerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "scope-owner@example.test", password: "strong-password" });
+    const ownerToken = ownerLogin.body.token;
+
+    const clientA = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Client A" });
+    const clientB = await request(isolatedApp)
+      .post("/api/clients")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Client B" });
+
+    const manager = await request(isolatedApp)
+      .post("/api/users")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        email: "scope-manager@example.test",
+        password: "manager-password",
+        name: "Scope Manager",
+        role: "manager",
+        clientIds: [clientA.body.client.id],
+        allLocations: true
+      });
+    const editorA = await request(isolatedApp)
+      .post("/api/users")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        email: "scope-editor-a@example.test",
+        password: "editor-password",
+        name: "Editor A",
+        role: "editor",
+        clientIds: [clientA.body.client.id],
+        allLocations: true
+      });
+    const editorB = await request(isolatedApp)
+      .post("/api/users")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        email: "scope-editor-b@example.test",
+        password: "editor-password",
+        name: "Editor B",
+        role: "editor",
+        clientIds: [clientB.body.client.id],
+        allLocations: true
+      });
+
+    const managerLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "scope-manager@example.test", password: "manager-password" });
+    const managerBootstrap = await request(isolatedApp)
+      .get("/api/bootstrap")
+      .set("Authorization", `Bearer ${managerLogin.body.token}`);
+
+    assert.deepEqual(
+      managerBootstrap.body.users.map((entry: any) => entry.email).sort(),
+      ["scope-editor-a@example.test", "scope-manager@example.test"]
+    );
+
+    const managerPasswordUpdate = await request(isolatedApp)
+      .put(`/api/users/${editorA.body.user.id}`)
+      .set("Authorization", `Bearer ${managerLogin.body.token}`)
+      .send({ password: "editor-updated-password" });
+    assert.equal(managerPasswordUpdate.status, 200);
+
+    const forbiddenProfileUpdate = await request(isolatedApp)
+      .put(`/api/users/${editorA.body.user.id}`)
+      .set("Authorization", `Bearer ${managerLogin.body.token}`)
+      .send({ name: "Changed Name", password: "another-password" });
+    assert.equal(forbiddenProfileUpdate.status, 403);
+
+    const forbiddenOtherClientUpdate = await request(isolatedApp)
+      .put(`/api/users/${editorB.body.user.id}`)
+      .set("Authorization", `Bearer ${managerLogin.body.token}`)
+      .send({ password: "other-client-password" });
+    assert.equal(forbiddenOtherClientUpdate.status, 403);
+
+    const editorLogin = await request(isolatedApp)
+      .post("/api/auth/login")
+      .send({ email: "scope-editor-a@example.test", password: "editor-updated-password" });
+    assert.equal(editorLogin.status, 200);
+
+    const editorBootstrap = await request(isolatedApp)
+      .get("/api/bootstrap")
+      .set("Authorization", `Bearer ${editorLogin.body.token}`);
+    assert.deepEqual(editorBootstrap.body.users.map((entry: any) => entry.email), ["scope-editor-a@example.test"]);
+
+    const editorSelfUpdate = await request(isolatedApp)
+      .put(`/api/users/${editorA.body.user.id}`)
+      .set("Authorization", `Bearer ${editorLogin.body.token}`)
+      .send({ password: "editor-self-password" });
+    assert.equal(editorSelfUpdate.status, 200);
+
+    const forbiddenEditorUpdate = await request(isolatedApp)
+      .put(`/api/users/${manager.body.user.id}`)
+      .set("Authorization", `Bearer ${editorLogin.body.token}`)
+      .send({ password: "manager-changed-by-editor" });
+    assert.equal(forbiddenEditorUpdate.status, 403);
 
     await rm(isolatedDataDir, { recursive: true, force: true });
   });
