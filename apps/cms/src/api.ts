@@ -123,10 +123,10 @@ export async function updateUser(
   token: string,
   userId: string,
   payload: {
-    email: string;
+    email?: string;
     password?: string;
-    name: string;
-    role: string;
+    name?: string;
+    role?: string;
     clientIds?: string[];
     allLocations?: boolean;
     locationIds?: string[];

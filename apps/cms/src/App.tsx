@@ -41,6 +41,7 @@ import {
   updateDevice,
   updateLocation,
   updatePlaybackEvent,
+  updatePlaylist,
   updateSchedule,
   updateUser,
   uploadMedia
@@ -578,6 +579,8 @@ function App() {
   const playbackEvents = dashboard.playbackEvents || [];
   const deviceLogs = dashboard.deviceLogs || [];
   const proofOfPlay = dashboard.proofOfPlay || [];
+  const canFullyManageUsers = dashboard.user.role === "owner";
+  const passwordOnlyUserManagement = !canFullyManageUsers;
   const allPendingDevices = devices.filter((device) => device.approvalStatus === "pending");
   const allApprovedDevices = devices.filter((device) => device.approvalStatus === "approved");
   const deviceFilterActive = Boolean(deviceFilters.clientId || deviceFilters.locationId || deviceFilters.query.trim() || deviceFilters.type);
@@ -731,6 +734,15 @@ function App() {
   useEffect(() => {
     playlistBuilderItemsRef.current = playlistBuilderItems;
   }, [playlistBuilderItems]);
+
+  useEffect(() => {
+    if (activeSection !== "users" || canFullyManageUsers || userForm.id || !dashboard.user.id) {
+      return;
+    }
+
+    const self = dashboard.users.find((user) => user.id === dashboard.user.id) || dashboard.user;
+    beginUserEdit(self);
+  }, [activeSection, canFullyManageUsers, dashboard.user, dashboard.users, userForm.id]);
 
   useEffect(
     () => () => {
@@ -1066,6 +1078,24 @@ function App() {
       sortOrder: String((playlist.items.at(-1)?.sortOrder || 0) + 10)
     }));
     setActiveSection("playlists");
+  }
+
+  function togglePlaylistActive(playlist: PlaylistRecord) {
+    if (!token) {
+      return;
+    }
+
+    void runMutation(
+      async () =>
+        updatePlaylist(token, playlist.id, {
+          clientId: playlist.clientId,
+          channelId: playlist.channelId,
+          name: playlist.name,
+          isActive: !playlist.isActive,
+          notes: playlist.notes
+        }),
+      playlist.isActive ? "Wyłączono playlistę." : "Aktywowano playlistę."
+    );
   }
 
   function beginScheduleEdit(schedule: ScheduleRecord) {
@@ -1425,7 +1455,15 @@ function App() {
                       if (!token) {
                         return;
                       }
-                      if (userForm.id) {
+                      if (passwordOnlyUserManagement) {
+                        if (!userForm.id || !userForm.password) {
+                          setFlash({ kind: "error", text: "Wybierz konto i wpisz nowe hasło." });
+                          return;
+                        }
+                        await updateUser(token, userForm.id, {
+                          password: userForm.password
+                        });
+                      } else if (userForm.id) {
                         await updateUser(token, userForm.id, {
                           email: userForm.email,
                           password: userForm.password || undefined,
@@ -1439,132 +1477,161 @@ function App() {
                         await createUser(token, userForm);
                       }
                     },
-                    userForm.id ? "Zapisano zmiany użytkownika." : "Dodano nowe konto CMS.",
-                    () => setUserForm(emptyUserForm)
+                    passwordOnlyUserManagement
+                      ? "Zmieniono hasło użytkownika."
+                      : userForm.id
+                        ? "Zapisano zmiany użytkownika."
+                        : "Dodano nowe konto CMS.",
+                    () => {
+                      setUserForm(emptyUserForm);
+                    }
                   );
                 }}
               >
                 <header className="panel-header">
-                  <h3>{userForm.id ? "Edytuj użytkownika" : "Dodaj użytkownika"}</h3>
-                  {userForm.id ? (
+                  <h3>
+                    {passwordOnlyUserManagement
+                      ? "Zmień hasło"
+                      : userForm.id
+                        ? "Edytuj użytkownika"
+                        : "Dodaj użytkownika"}
+                  </h3>
+                  {userForm.id && canFullyManageUsers ? (
                     <button className="ghost-button" type="button" onClick={() => setUserForm(emptyUserForm)}>
                       Anuluj
                     </button>
                   ) : null}
                 </header>
-                <Field label="Imię i nazwisko" htmlFor="user-name">
-                  <input
-                    id="user-name"
-                    name="user-name"
-                    value={userForm.name}
-                    onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))}
-                    required
-                  />
-                </Field>
-                <Field label="Email" htmlFor="user-email">
-                  <input
-                    id="user-email"
-                    name="user-email"
-                    type="email"
-                    value={userForm.email}
-                    onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
-                    required
-                  />
-                </Field>
-                <Field label={userForm.id ? "Nowe hasło (opcjonalnie)" : "Hasło"} htmlFor="user-password">
+                {passwordOnlyUserManagement ? (
+                  <Field label="Konto" htmlFor="user-account">
+                    <input
+                      id="user-account"
+                      name="user-account"
+                      value={userForm.id ? `${userForm.name} · ${userForm.email}` : "Wybierz konto z listy"}
+                      disabled
+                    />
+                  </Field>
+                ) : (
+                  <>
+                    <Field label="Imię i nazwisko" htmlFor="user-name">
+                      <input
+                        id="user-name"
+                        name="user-name"
+                        value={userForm.name}
+                        onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))}
+                        required
+                      />
+                    </Field>
+                    <Field label="Email" htmlFor="user-email">
+                      <input
+                        id="user-email"
+                        name="user-email"
+                        type="email"
+                        value={userForm.email}
+                        onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
+                        required
+                      />
+                    </Field>
+                  </>
+                )}
+                <Field label={passwordOnlyUserManagement ? "Nowe hasło" : userForm.id ? "Nowe hasło (opcjonalnie)" : "Hasło"} htmlFor="user-password">
                   <input
                     id="user-password"
                     name="user-password"
                     type="password"
-                    minLength={userForm.id ? 0 : 8}
+                    minLength={userForm.id && !passwordOnlyUserManagement ? 0 : 8}
                     value={userForm.password}
                     onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
-                    required={!userForm.id}
+                    required={!userForm.id || passwordOnlyUserManagement}
                   />
                 </Field>
-                <Field label="Rola" htmlFor="user-role">
-                  <select
-                    id="user-role"
-                    name="user-role"
-                    value={userForm.role}
-                    onChange={(event) =>
-                      setUserForm((current) => ({ ...current, role: event.target.value as UserRole }))
-                    }
-                  >
-                    <option value="owner">Owner</option>
-                    <option value="manager">Manager</option>
-                    <option value="editor">Editor</option>
-                  </select>
-                </Field>
-                {userForm.role !== "owner" ? (
+                {!passwordOnlyUserManagement ? (
                   <>
-                    <Field label="Klienci" htmlFor="user-client-access">
-                      <div id="user-client-access" className="checkbox-grid">
-                        {clients.map((client) => (
-                          <label key={client.id} className="checkbox-row compact">
-                            <input
-                              type="checkbox"
-                              checked={userForm.clientIds.includes(client.id)}
-                              onChange={() =>
-                                setUserForm((current) => {
-                                  const clientIds = toggleValue(current.clientIds, client.id);
-                                  return {
-                                    ...current,
-                                    clientIds,
-                                    locationIds: current.locationIds.filter((locationId) => {
-                                      const location = locationLookup.get(locationId);
-                                      return location && clientIds.includes(location.clientId);
-                                    })
-                                  };
-                                })
-                              }
-                            />
-                            <span>{client.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </Field>
-                    <label className="checkbox-row" htmlFor="user-all-locations">
-                      <input
-                        id="user-all-locations"
-                        name="user-all-locations"
-                        type="checkbox"
-                        checked={userForm.allLocations}
+                    <Field label="Rola" htmlFor="user-role">
+                      <select
+                        id="user-role"
+                        name="user-role"
+                        value={userForm.role}
                         onChange={(event) =>
-                          setUserForm((current) => ({
-                            ...current,
-                            allLocations: event.target.checked,
-                            locationIds: event.target.checked ? [] : current.locationIds
-                          }))
+                          setUserForm((current) => ({ ...current, role: event.target.value as UserRole }))
                         }
-                      />
-                      <span>Dostęp do wszystkich lokalizacji wybranych klientów</span>
-                    </label>
-                    {!userForm.allLocations ? (
-                      <Field label="Lokalizacje" htmlFor="user-location-access">
-                        <div id="user-location-access" className="checkbox-grid">
-                          {locationsForUserForm.map((location) => (
-                            <label key={location.id} className="checkbox-row compact">
-                              <input
-                                type="checkbox"
-                                checked={userForm.locationIds.includes(location.id)}
-                                onChange={() =>
-                                  setUserForm((current) => ({
-                                    ...current,
-                                    locationIds: toggleValue(current.locationIds, location.id)
-                                  }))
-                                }
-                              />
-                              <span>{location.name}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </Field>
+                      >
+                        <option value="owner">Owner</option>
+                        <option value="manager">Manager</option>
+                        <option value="editor">Editor</option>
+                      </select>
+                    </Field>
+                    {userForm.role !== "owner" ? (
+                      <>
+                        <Field label="Klienci" htmlFor="user-client-access">
+                          <div id="user-client-access" className="checkbox-grid">
+                            {clients.map((client) => (
+                              <label key={client.id} className="checkbox-row compact">
+                                <input
+                                  type="checkbox"
+                                  checked={userForm.clientIds.includes(client.id)}
+                                  onChange={() =>
+                                    setUserForm((current) => {
+                                      const clientIds = toggleValue(current.clientIds, client.id);
+                                      return {
+                                        ...current,
+                                        clientIds,
+                                        locationIds: current.locationIds.filter((locationId) => {
+                                          const location = locationLookup.get(locationId);
+                                          return location && clientIds.includes(location.clientId);
+                                        })
+                                      };
+                                    })
+                                  }
+                                />
+                                <span>{client.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </Field>
+                        <label className="checkbox-row" htmlFor="user-all-locations">
+                          <input
+                            id="user-all-locations"
+                            name="user-all-locations"
+                            type="checkbox"
+                            checked={userForm.allLocations}
+                            onChange={(event) =>
+                              setUserForm((current) => ({
+                                ...current,
+                                allLocations: event.target.checked,
+                                locationIds: event.target.checked ? [] : current.locationIds
+                              }))
+                            }
+                          />
+                          <span>Dostęp do wszystkich lokalizacji wybranych klientów</span>
+                        </label>
+                        {!userForm.allLocations ? (
+                          <Field label="Lokalizacje" htmlFor="user-location-access">
+                            <div id="user-location-access" className="checkbox-grid">
+                              {locationsForUserForm.map((location) => (
+                                <label key={location.id} className="checkbox-row compact">
+                                  <input
+                                    type="checkbox"
+                                    checked={userForm.locationIds.includes(location.id)}
+                                    onChange={() =>
+                                      setUserForm((current) => ({
+                                        ...current,
+                                        locationIds: toggleValue(current.locationIds, location.id)
+                                      }))
+                                    }
+                                  />
+                                  <span>{location.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </Field>
+                        ) : null}
+                      </>
                     ) : null}
                   </>
                 ) : null}
                 <button className="primary-button" type="submit" disabled={submitting}>
-                  {submitting ? "Zapisywanie..." : userForm.id ? "Zapisz użytkownika" : "Dodaj konto"}
+                  {submitting ? "Zapisywanie..." : passwordOnlyUserManagement ? "Zmień hasło" : userForm.id ? "Zapisz użytkownika" : "Dodaj konto"}
                 </button>
               </form>
 
@@ -1584,24 +1651,26 @@ function App() {
                         <div className="card-actions">
                           <span className="status-pill neutral">{user.role}</span>
                           <button className="ghost-button" type="button" onClick={() => beginUserEdit(user)}>
-                            Edytuj
+                            {canFullyManageUsers ? "Edytuj" : "Hasło"}
                           </button>
-                          <button
-                            className="danger-button"
-                            type="button"
-                            disabled={user.id === dashboard.user.id}
-                            onClick={() => {
-                              if (!token || !window.confirm(`Usunąć konto ${user.email}?`)) {
-                                return;
-                              }
-                              void runMutation(
-                                async () => deleteUser(token, user.id),
-                                "Usunięto konto CMS."
-                              );
-                            }}
-                          >
-                            Usuń
-                          </button>
+                          {canFullyManageUsers ? (
+                            <button
+                              className="danger-button"
+                              type="button"
+                              disabled={user.id === dashboard.user.id}
+                              onClick={() => {
+                                if (!token || !window.confirm(`Usunąć konto ${user.email}?`)) {
+                                  return;
+                                }
+                                void runMutation(
+                                  async () => deleteUser(token, user.id),
+                                  "Usunięto konto CMS."
+                                );
+                              }}
+                            >
+                              Usuń
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     ))}
@@ -2890,6 +2959,9 @@ function App() {
                           <span className={`status-pill ${playlist.isActive ? "online" : "offline"}`}>
                             {playlist.isActive ? "active" : "paused"}
                           </span>
+                          <button className="ghost-button" type="button" onClick={() => togglePlaylistActive(playlist)} disabled={submitting}>
+                            {playlist.isActive ? "Wyłącz" : "Aktywuj"}
+                          </button>
                           <button className="ghost-button" type="button" onClick={() => beginPlaylistEdit(playlist)}>
                             Edytuj
                           </button>
