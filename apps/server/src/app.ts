@@ -1347,8 +1347,8 @@ app.get("/api/proof-of-play", requireAuth, (req, res) => {
 });
 
 app.post("/api/player/session", async (req, res) => {
-  const serial = normalizeSerial(String(req.body?.serial || ""));
-  const secret = String(req.body?.secret || "").trim();
+  const serial = normalizeSerial(String(req.body?.serial || req.body?.deviceSerial || ""));
+  const secret = readPlayerSecret(req.body);
   if (!serial || !secret) {
     res.status(400).json({ message: "Urządzenie musi wysłać numer seryjny i klucz lokalny." });
     return;
@@ -1370,7 +1370,7 @@ app.post("/api/player/session", async (req, res) => {
       platform: String(req.body?.platform || "android").trim() || "android",
       appVersion: String(req.body?.appVersion || "").trim(),
       deviceModel: String(req.body?.deviceModel || "Android TV").trim() || "Android TV",
-      playerType: "video_standard",
+      playerType: normalizeDevicePlayerType(req.body?.playerType || req.body?.deviceType || "video_standard"),
       desiredDisplayState: "active",
       volumePercent: 80,
       playerState: "waiting",
@@ -1394,7 +1394,10 @@ app.post("/api/player/session", async (req, res) => {
   device.platform = String(req.body?.platform || device.platform || "android").trim() || "android";
   device.appVersion = String(req.body?.appVersion || device.appVersion || "").trim();
   device.deviceModel = String(req.body?.deviceModel || device.deviceModel || "Android TV").trim() || "Android TV";
-  device.playerType = normalizeDevicePlayerType(device.playerType);
+  device.playerType =
+    device.approvalStatus === "approved"
+      ? normalizeDevicePlayerType(device.playerType)
+      : normalizeDevicePlayerType(req.body?.playerType || req.body?.deviceType || device.playerType);
   device.playerState = String(req.body?.playerState || device.playerState || "waiting").trim() || "waiting";
   device.playerMessage = String(req.body?.playerMessage || device.playerMessage || "").trim();
   device.activeItemTitle = String(req.body?.activeItemTitle || "").trim();
@@ -1421,8 +1424,8 @@ app.post("/api/player/session", async (req, res) => {
 });
 
 app.post("/api/player/logs", async (req, res) => {
-  const serial = normalizeSerial(String(req.body?.serial || ""));
-  const secret = String(req.body?.secret || "").trim();
+  const serial = normalizeSerial(String(req.body?.serial || req.body?.deviceSerial || ""));
+  const secret = readPlayerSecret(req.body);
   const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
 
   if (!device) {
@@ -1459,7 +1462,7 @@ app.post("/api/player/logs", async (req, res) => {
 });
 
 app.post("/api/player/proof-of-play", async (req, res) => {
-  const secret = String(req.body?.secret || req.body?.deviceSecret || "").trim();
+  const secret = readPlayerSecret(req.body);
   const device = findPlayerReportDevice(req.body, secret);
 
   if (!device) {
@@ -1515,8 +1518,8 @@ app.post("/api/player/proof-of-play", async (req, res) => {
 });
 
 app.post("/api/player/commands/:id/ack", async (req, res) => {
-  const serial = normalizeSerial(String(req.body?.serial || ""));
-  const secret = String(req.body?.secret || "").trim();
+  const serial = normalizeSerial(String(req.body?.serial || req.body?.deviceSerial || ""));
+  const secret = readPlayerSecret(req.body);
   const command = findById(database.deviceCommands, req.params.id);
 
   if (!command) {
@@ -1541,8 +1544,8 @@ app.post("/api/player/commands/:id/ack", async (req, res) => {
 });
 
 app.post("/api/player/reset", async (req, res) => {
-  const serial = normalizeSerial(String(req.body?.serial || ""));
-  const secret = String(req.body?.secret || "").trim();
+  const serial = normalizeSerial(String(req.body?.serial || req.body?.deviceSerial || ""));
+  const secret = readPlayerSecret(req.body);
   const device = database.devices.find((entry) => entry.serial === serial && entry.secret === secret);
 
   if (!device) {
@@ -2177,6 +2180,10 @@ function findDevice(deviceId, serial) {
   }
 
   return null;
+}
+
+function readPlayerSecret(body) {
+  return String(body?.secret || body?.deviceSecret || "").trim();
 }
 
 function findPlayerReportDevice(body, secret) {

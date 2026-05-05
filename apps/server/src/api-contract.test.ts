@@ -78,6 +78,60 @@ describe("MVP API contract", () => {
     assert.equal(typeof playerSession.body.serverTime, "string");
   });
 
+  it("accepts Raspberry Pi player protocol aliases for registration, logs, and proof of play", async () => {
+    const isolatedDataDir = await mkdtemp(join(tmpdir(), "signal-deck-rpi-api-"));
+    const isolatedApp = await createApp({
+      dataDir: isolatedDataDir,
+      adminEmail: "rpi-owner@example.test",
+      adminPassword: "strong-password",
+      adminName: "RPI Owner"
+    });
+
+    const session = await request(isolatedApp)
+      .post("/api/player/session")
+      .send({
+        deviceSerial: "rpi-zero-2wh",
+        deviceSecret: "rpi-local-secret",
+        platform: "linux",
+        appVersion: "rpi-agent-0.1.0",
+        deviceModel: "Raspberry Pi Zero 2 WH",
+        playerType: "streaming",
+        playerState: "idle"
+      });
+
+    assert.equal(session.status, 200);
+    assert.equal(session.body.device.serial, "RPIZERO2WH");
+    assert.equal(session.body.device.platform, "linux");
+    assert.equal(session.body.device.deviceModel, "Raspberry Pi Zero 2 WH");
+    assert.equal(session.body.device.playerType, "streaming");
+    assert.equal(session.body.approvalStatus, "pending");
+
+    const log = await request(isolatedApp)
+      .post("/api/player/logs")
+      .send({
+        deviceSerial: "rpi-zero-2wh",
+        deviceSecret: "rpi-local-secret",
+        severity: "info",
+        component: "sync",
+        message: "RPI API check"
+      });
+    assert.equal(log.status, 201);
+
+    const proof = await request(isolatedApp)
+      .post("/api/player/proof-of-play")
+      .send({
+        deviceSerial: "rpi-zero-2wh",
+        deviceSecret: "rpi-local-secret",
+        status: "started",
+        mediaTitle: "Offline cached asset",
+        mediaKind: "video",
+        occurredAt: "2026-04-24T10:00:00.000Z"
+      });
+    assert.equal(proof.status, 201);
+
+    await rm(isolatedDataDir, { recursive: true, force: true });
+  });
+
   it("can boot through Prisma persistence when a database client is configured", async () => {
     const calls: string[] = [];
     const prisma = createFakePrisma(calls);
